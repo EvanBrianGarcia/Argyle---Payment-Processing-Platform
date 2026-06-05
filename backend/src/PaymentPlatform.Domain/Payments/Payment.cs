@@ -4,14 +4,18 @@ namespace PaymentPlatform.Domain.Payments;
 
 public sealed class Payment
 {
-    public string Id { get; }
-    public string MerchantId { get; }
-    public Money Amount { get; }
-    public string CardToken { get; }
-    public string? CustomerReference { get; }
-    public IReadOnlyDictionary<string, string> Metadata { get; }
-    public PaymentStatus Status { get; }
-    public DateTimeOffset CreatedAt { get; }
+    public string Id { get; private set; } = default!;
+    public string MerchantId { get; private set; } = default!;
+    public Money Amount { get; private set; }
+    public string CardToken { get; private set; } = default!;
+    public string? CustomerReference { get; private set; }
+    public IReadOnlyDictionary<string, string> Metadata { get; private set; } = default!;
+    public PaymentStatus Status { get; private set; }
+    public DateTimeOffset CreatedAt { get; private set; }
+
+    private Payment()
+    {
+    }
 
     private Payment(
         string id,
