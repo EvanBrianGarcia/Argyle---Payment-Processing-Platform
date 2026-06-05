@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PaymentPlatform.Api/PaymentPlatform.Api.csproj" />
+    <Project Path="src/PaymentPlatform.Application/PaymentPlatform.Application.csproj" />
+    <Project Path="src/PaymentPlatform.Contracts/PaymentPlatform.Contracts.csproj" />
+    <Project Path="src/PaymentPlatform.Domain/PaymentPlatform.Domain.csproj" />
+    <Project Path="src/PaymentPlatform.Infrastructure/PaymentPlatform.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PaymentPlatform.IntegrationTests/PaymentPlatform.IntegrationTests.csproj" />
+    <Project Path="tests/PaymentPlatform.UnitTests/PaymentPlatform.UnitTests.csproj" />
+  </Folder>
+</Solution>
