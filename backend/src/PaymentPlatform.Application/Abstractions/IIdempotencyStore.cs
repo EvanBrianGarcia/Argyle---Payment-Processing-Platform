@@ -6,6 +6,7 @@ public interface IIdempotencyStore
 {
     Task<IdempotencyKeyRecord?> FindAsync(
         string merchantId,
+        string operation,
         string key,
         CancellationToken cancellationToken);
 

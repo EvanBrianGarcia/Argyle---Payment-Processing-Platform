@@ -13,6 +13,7 @@ public sealed class PaymentsDbContext : DbContext, IPaymentsDbContext
     }
 
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<PaymentEvent> PaymentEvents => Set<PaymentEvent>();
     public DbSet<Merchant> Merchants => Set<Merchant>();
     public DbSet<IdempotencyKeyRecord> IdempotencyKeys => Set<IdempotencyKeyRecord>();
 

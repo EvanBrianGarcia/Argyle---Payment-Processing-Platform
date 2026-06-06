@@ -3,6 +3,7 @@ namespace PaymentPlatform.Domain.Idempotency;
 public sealed class IdempotencyKeyRecord
 {
     public string MerchantId { get; private set; } = default!;
+    public string Operation { get; private set; } = default!;
     public string Key { get; private set; } = default!;
     public string RequestHash { get; private set; } = default!;
     public int ResponseStatus { get; private set; }
@@ -13,6 +14,7 @@ public sealed class IdempotencyKeyRecord
 
     public IdempotencyKeyRecord(
         string merchantId,
+        string operation,
         string key,
         string requestHash,
         int responseStatus,
@@ -20,6 +22,7 @@ public sealed class IdempotencyKeyRecord
         DateTimeOffset createdAt)
     {
         MerchantId = merchantId;
+        Operation = operation;
         Key = key;
         RequestHash = requestHash;
         ResponseStatus = responseStatus;

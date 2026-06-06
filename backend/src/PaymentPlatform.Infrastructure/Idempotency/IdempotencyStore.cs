@@ -15,12 +15,16 @@ public sealed class IdempotencyStore : IIdempotencyStore
 
     public Task<IdempotencyKeyRecord?> FindAsync(
         string merchantId,
+        string operation,
         string key,
         CancellationToken cancellationToken) =>
         _db.IdempotencyKeys
             .AsNoTracking()
             .FirstOrDefaultAsync(
-                record => record.MerchantId == merchantId && record.Key == key,
+                record =>
+                    record.MerchantId == merchantId &&
+                    record.Operation == operation &&
+                    record.Key == key,
                 cancellationToken);
 
     public async Task SaveAsync(

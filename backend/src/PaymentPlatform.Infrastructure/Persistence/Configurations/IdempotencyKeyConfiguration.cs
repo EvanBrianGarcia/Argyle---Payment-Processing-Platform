@@ -10,11 +10,16 @@ public sealed class IdempotencyKeyConfiguration : IEntityTypeConfiguration<Idemp
     {
         builder.ToTable("idempotency_keys");
 
-        builder.HasKey(i => new { i.MerchantId, i.Key })
+        builder.HasKey(i => new { i.MerchantId, i.Operation, i.Key })
             .HasName("pk_idempotency_keys");
 
         builder.Property(i => i.MerchantId)
             .HasColumnName("merchant_id")
+            .HasColumnType("text")
+            .IsRequired();
+
+        builder.Property(i => i.Operation)
+            .HasColumnName("operation")
             .HasColumnType("text")
             .IsRequired();
 

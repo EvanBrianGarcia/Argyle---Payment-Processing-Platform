@@ -43,6 +43,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
 
         var existing = await _idempotency.FindAsync(
             merchantId,
+            IdempotencyOperations.CreatePayment,
             command.IdempotencyKey,
             cancellationToken);
 
@@ -70,6 +71,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         var responseBody = JsonSerializer.Serialize(response, ResponseJsonOptions);
         var record = new IdempotencyKeyRecord(
             merchantId: merchantId,
+            operation: IdempotencyOperations.CreatePayment,
             key: command.IdempotencyKey,
             requestHash: requestHash,
             responseStatus: StatusCodes.Created,
@@ -84,6 +86,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         {
             var winner = await _idempotency.FindAsync(
                 merchantId,
+                IdempotencyOperations.CreatePayment,
                 command.IdempotencyKey,
                 cancellationToken);
 

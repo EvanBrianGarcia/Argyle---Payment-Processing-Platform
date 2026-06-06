@@ -8,6 +8,7 @@ namespace PaymentPlatform.Application.Abstractions;
 public interface IPaymentsDbContext
 {
     DbSet<Payment> Payments { get; }
+    DbSet<PaymentEvent> PaymentEvents { get; }
     DbSet<Merchant> Merchants { get; }
     DbSet<IdempotencyKeyRecord> IdempotencyKeys { get; }
 
