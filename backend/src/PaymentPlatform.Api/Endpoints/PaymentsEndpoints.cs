@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Mvc;
 using PaymentPlatform.Application.Features.CapturePayment;
 using PaymentPlatform.Application.Features.CreatePayment;
 using PaymentPlatform.Application.Features.GetPayment;
+using PaymentPlatform.Application.Features.ListPayments;
 using PaymentPlatform.Application.Features.RefundPayment;
 using PaymentPlatform.Contracts.Payments;
+using PaymentPlatform.Domain.Payments;
 using AppValidationException = PaymentPlatform.Application.Common.ValidationException;
 using AppValidationFailure = PaymentPlatform.Application.Common.ValidationFailure;
 using NotFoundException = PaymentPlatform.Application.Common.NotFoundException;
@@ -19,11 +21,62 @@ public static class PaymentsEndpoints
         var group = routes.MapGroup("/v1/payments");
 
         group.MapPost("/", CreatePaymentAsync);
+        group.MapGet("/", ListPaymentsAsync);
         group.MapGet("/{id}", GetPaymentAsync);
         group.MapPost("/{id}/capture", CapturePaymentAsync);
         group.MapPost("/{id}/refund", RefundPaymentAsync);
 
         return routes;
+    }
+
+    private const int DefaultListLimit = 20;
+    private const int MaxListLimit = 100;
+
+    private static async Task<IResult> ListPaymentsAsync(
+        [FromQuery] string? status,
+        [FromQuery] string? cursor,
+        [FromQuery] int? limit,
+        IMediator mediator,
+        CancellationToken cancellationToken)
+    {
+        var failures = new List<AppValidationFailure>(2);
+
+        PaymentStatus? statusFilter = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (Enum.TryParse<PaymentStatus>(status, ignoreCase: true, out var parsed)
+                && Enum.IsDefined(parsed))
+            {
+                statusFilter = parsed;
+            }
+            else
+            {
+                failures.Add(new AppValidationFailure(
+                    "status",
+                    $"Status '{status}' is not a valid payment status."));
+            }
+        }
+
+        var effectiveLimit = limit ?? DefaultListLimit;
+        if (effectiveLimit < 1 || effectiveLimit > MaxListLimit)
+        {
+            failures.Add(new AppValidationFailure(
+                "limit",
+                $"Limit must be between 1 and {MaxListLimit}."));
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AppValidationException(failures);
+        }
+
+        var query = new ListPaymentsQuery(
+            Status: statusFilter,
+            Cursor: cursor,
+            Limit: effectiveLimit);
+
+        var response = await mediator.Send(query, cancellationToken);
+        return Results.Ok(response);
     }
 
     private static async Task<IResult> CreatePaymentAsync(
