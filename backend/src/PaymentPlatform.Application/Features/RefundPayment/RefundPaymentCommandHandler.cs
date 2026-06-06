@@ -5,9 +5,9 @@ using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
 using PaymentPlatform.Contracts.Payments;
 
-namespace PaymentPlatform.Application.Features.CapturePayment;
+namespace PaymentPlatform.Application.Features.RefundPayment;
 
-public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymentCommand, PaymentResponse>
+public sealed class RefundPaymentCommandHandler : IRequestHandler<RefundPaymentCommand, PaymentResponse>
 {
     private const int OkStatusCode = 200;
 
@@ -16,7 +16,7 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
     private readonly ICurrentMerchant _currentMerchant;
     private readonly IClock _clock;
 
-    public CapturePaymentCommandHandler(
+    public RefundPaymentCommandHandler(
         IPaymentsDbContext db,
         IdempotencyExecutor executor,
         ICurrentMerchant currentMerchant,
@@ -29,24 +29,24 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
     }
 
     public Task<PaymentResponse> Handle(
-        CapturePaymentCommand command,
+        RefundPaymentCommand command,
         CancellationToken cancellationToken)
     {
         var merchantId = _currentMerchant.MerchantId;
 
         return _executor.RunAsync(
             merchantId: merchantId,
-            operation: IdempotencyOperations.CapturePayment,
+            operation: IdempotencyOperations.RefundPayment,
             idempotencyKey: command.IdempotencyKey,
             requestHash: ComputeRequestHash(command),
             successStatus: OkStatusCode,
-            work: ct => CaptureAsync(merchantId, command, ct),
+            work: ct => RefundAsync(merchantId, command, ct),
             cancellationToken: cancellationToken);
     }
 
-    private async Task<PaymentResponse> CaptureAsync(
+    private async Task<PaymentResponse> RefundAsync(
         string merchantId,
-        CapturePaymentCommand command,
+        RefundPaymentCommand command,
         CancellationToken cancellationToken)
     {
         // Tracking load — optimistic concurrency on payments.version requires
@@ -62,9 +62,9 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
                 message: $"Payment '{command.PaymentId}' was not found.");
         }
 
-        // payment.Capture throws InvalidTransitionException on illegal states.
+        // payment.Refund throws InvalidTransitionException on illegal states.
         // The middleware maps it to 409 invalid_state_transition.
-        var evt = payment.Capture(_clock.UtcNow);
+        var evt = payment.Refund(_clock.UtcNow, command.Reason);
         _db.PaymentEvents.Add(evt);
 
         var priorEvents = await _db.PaymentEvents
@@ -76,12 +76,12 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
         return PaymentResponseSerializer.ToResponse(payment, priorEvents.Append(evt));
     }
 
-    private static string ComputeRequestHash(CapturePaymentCommand command)
+    private static string ComputeRequestHash(RefundPaymentCommand command)
     {
         var payload = new
         {
             payment_id = command.PaymentId,
-            amount_minor = command.AmountMinor,
+            reason = command.Reason,
         };
         return CanonicalJson.Hash(JsonSerializer.Serialize(payload));
     }

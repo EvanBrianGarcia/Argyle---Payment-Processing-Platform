@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using PaymentPlatform.Application.Features.CapturePayment;
 using PaymentPlatform.Application.Features.CreatePayment;
 using PaymentPlatform.Application.Features.GetPayment;
+using PaymentPlatform.Application.Features.RefundPayment;
 using PaymentPlatform.Contracts.Payments;
 using AppValidationException = PaymentPlatform.Application.Common.ValidationException;
 using AppValidationFailure = PaymentPlatform.Application.Common.ValidationFailure;
@@ -20,6 +21,7 @@ public static class PaymentsEndpoints
         group.MapPost("/", CreatePaymentAsync);
         group.MapGet("/{id}", GetPaymentAsync);
         group.MapPost("/{id}/capture", CapturePaymentAsync);
+        group.MapPost("/{id}/refund", RefundPaymentAsync);
 
         return routes;
     }
@@ -79,6 +81,32 @@ public static class PaymentsEndpoints
             PaymentId: id,
             IdempotencyKey: idempotencyKey ?? string.Empty,
             AmountMinor: request?.AmountMinor);
+
+        var result = await validator.ValidateAsync(command, cancellationToken);
+        if (!result.IsValid)
+        {
+            var failures = result.Errors
+                .Select(e => new AppValidationFailure(e.PropertyName, e.ErrorMessage))
+                .ToList();
+            throw new AppValidationException(failures);
+        }
+
+        var response = await mediator.Send(command, cancellationToken);
+        return Results.Ok(response);
+    }
+
+    private static async Task<IResult> RefundPaymentAsync(
+        string id,
+        [FromBody] RefundPaymentRequest? request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        IValidator<RefundPaymentCommand> validator,
+        IMediator mediator,
+        CancellationToken cancellationToken)
+    {
+        var command = new RefundPaymentCommand(
+            PaymentId: id,
+            IdempotencyKey: idempotencyKey ?? string.Empty,
+            Reason: request?.Reason ?? string.Empty);
 
         var result = await validator.ValidateAsync(command, cancellationToken);
         if (!result.IsValid)

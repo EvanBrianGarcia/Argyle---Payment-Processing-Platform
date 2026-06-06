@@ -2,6 +2,7 @@ using FluentValidation;
 using PaymentPlatform.Api.Auth;
 using PaymentPlatform.Api.Serialization;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Application.Common;
 using PaymentPlatform.Application.Features.CreatePayment;
 
 namespace PaymentPlatform.Api;
@@ -19,6 +20,8 @@ public static class DependencyInjection
             cfg.RegisterServicesFromAssembly(typeof(CreatePaymentCommand).Assembly));
 
         services.AddValidatorsFromAssemblyContaining<CreatePaymentCommandValidator>();
+
+        services.AddScoped<IdempotencyExecutor>();
 
         services.ConfigureHttpJsonOptions(options =>
             JsonOptions.Configure(options.SerializerOptions));

@@ -1,55 +1,54 @@
 using System.Text.Json;
 using MediatR;
-using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
 using PaymentPlatform.Contracts.Payments;
-using PaymentPlatform.Domain.Idempotency;
 using PaymentPlatform.Domain.Payments;
 
 namespace PaymentPlatform.Application.Features.CreatePayment;
 
 public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentCommand, PaymentResponse>
 {
+    private const int CreatedStatusCode = 201;
+
     private readonly IPaymentsDbContext _db;
-    private readonly IIdempotencyStore _idempotency;
+    private readonly IdempotencyExecutor _executor;
     private readonly ICurrentMerchant _currentMerchant;
     private readonly IClock _clock;
 
     public CreatePaymentCommandHandler(
         IPaymentsDbContext db,
-        IIdempotencyStore idempotency,
+        IdempotencyExecutor executor,
         ICurrentMerchant currentMerchant,
         IClock clock)
     {
         _db = db;
-        _idempotency = idempotency;
+        _executor = executor;
         _currentMerchant = currentMerchant;
         _clock = clock;
     }
 
-    public async Task<PaymentResponse> Handle(
+    public Task<PaymentResponse> Handle(
         CreatePaymentCommand command,
         CancellationToken cancellationToken)
     {
         var merchantId = _currentMerchant.MerchantId;
-        var requestHash = ComputeRequestHash(command);
 
-        var existing = await _idempotency.FindAsync(
-            merchantId,
-            IdempotencyOperations.CreatePayment,
-            command.IdempotencyKey,
-            cancellationToken);
+        return _executor.RunAsync(
+            merchantId: merchantId,
+            operation: IdempotencyOperations.CreatePayment,
+            idempotencyKey: command.IdempotencyKey,
+            requestHash: ComputeRequestHash(command),
+            successStatus: CreatedStatusCode,
+            work: ct => CreateAsync(merchantId, command, ct),
+            cancellationToken: cancellationToken);
+    }
 
-        if (existing is not null)
-        {
-            if (!string.Equals(existing.RequestHash, requestHash, StringComparison.Ordinal))
-            {
-                throw new IdempotencyConflictException();
-            }
-            return PaymentResponseSerializer.Deserialize(existing.ResponseBody);
-        }
-
+    private Task<PaymentResponse> CreateAsync(
+        string merchantId,
+        CreatePaymentCommand command,
+        CancellationToken cancellationToken)
+    {
         var money = new Money(command.AmountMinor, command.Currency);
         var payment = Payment.Create(
             merchantId: merchantId,
@@ -64,36 +63,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         // Task 7 will append the initial null → Pending event here; for Task 4
         // we keep the events list empty so the response shape is consistent.
         var response = PaymentResponseSerializer.ToResponse(payment, Array.Empty<PaymentEvent>());
-        var responseBody = PaymentResponseSerializer.Serialize(response);
-        var record = new IdempotencyKeyRecord(
-            merchantId: merchantId,
-            operation: IdempotencyOperations.CreatePayment,
-            key: command.IdempotencyKey,
-            requestHash: requestHash,
-            responseStatus: StatusCodes.Created,
-            responseBody: responseBody,
-            createdAt: _clock.UtcNow);
-
-        try
-        {
-            await _idempotency.SaveAsync(record, cancellationToken);
-        }
-        catch (DbUpdateException)
-        {
-            var winner = await _idempotency.FindAsync(
-                merchantId,
-                IdempotencyOperations.CreatePayment,
-                command.IdempotencyKey,
-                cancellationToken);
-
-            if (winner is not null)
-            {
-                return PaymentResponseSerializer.Deserialize(winner.ResponseBody);
-            }
-            throw;
-        }
-
-        return response;
+        return Task.FromResult(response);
     }
 
     private static string ComputeRequestHash(CreatePaymentCommand command)
@@ -107,10 +77,5 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
             metadata = command.Metadata ?? new Dictionary<string, string>(0),
         };
         return CanonicalJson.Hash(JsonSerializer.Serialize(payload));
-    }
-
-    private static class StatusCodes
-    {
-        public const int Created = 201;
     }
 }
