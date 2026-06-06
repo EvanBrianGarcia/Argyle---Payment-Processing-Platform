@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\PaymentPlatform.Domain\PaymentPlatform.Domain.csproj" />
     <ProjectReference Include="..\PaymentPlatform.Contracts\PaymentPlatform.Contracts.csproj" />
+    <ProjectReference Include="..\PaymentPlatform.Messaging\PaymentPlatform.Messaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>

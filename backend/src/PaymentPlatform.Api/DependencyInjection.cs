@@ -1,5 +1,6 @@
 using FluentValidation;
 using PaymentPlatform.Api.Auth;
+using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Api.Serialization;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
@@ -15,6 +16,7 @@ public static class DependencyInjection
 
         services.AddScoped<CurrentMerchant>();
         services.AddScoped<ICurrentMerchant>(sp => sp.GetRequiredService<CurrentMerchant>());
+        services.AddScoped<ICorrelationContext, HttpCorrelationContext>();
 
         services.AddMediatR(cfg =>
             cfg.RegisterServicesFromAssembly(typeof(CreatePaymentCommand).Assembly));

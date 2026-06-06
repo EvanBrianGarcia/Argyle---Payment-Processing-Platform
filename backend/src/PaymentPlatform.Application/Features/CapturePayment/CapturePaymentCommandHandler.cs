@@ -14,17 +14,20 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
     private readonly IPaymentsDbContext _db;
     private readonly IdempotencyExecutor _executor;
     private readonly ICurrentMerchant _currentMerchant;
+    private readonly ICorrelationContext _correlation;
     private readonly IClock _clock;
 
     public CapturePaymentCommandHandler(
         IPaymentsDbContext db,
         IdempotencyExecutor executor,
         ICurrentMerchant currentMerchant,
+        ICorrelationContext correlation,
         IClock clock)
     {
         _db = db;
         _executor = executor;
         _currentMerchant = currentMerchant;
+        _correlation = correlation;
         _clock = clock;
     }
 
@@ -66,6 +69,15 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
         // The middleware maps it to 409 invalid_state_transition.
         var evt = payment.Capture(_clock.UtcNow);
         _db.PaymentEvents.Add(evt);
+
+        // Settlement is async. Enqueue an outbox row inside the same
+        // SaveChangesAsync (driven by IdempotencyExecutor) so the capture and
+        // its settlement job commit atomically — ADR-0008.
+        var outboxMessage = OutboxMessageFactory.ForSettlement(
+            payment: payment,
+            correlationId: _correlation.CorrelationId,
+            now: _clock.UtcNow);
+        _db.PaymentOutbox.Add(outboxMessage);
 
         var priorEvents = await _db.PaymentEvents
             .AsNoTracking()
