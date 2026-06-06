@@ -1,10 +1,11 @@
 # Argyle — Payment Processing Platform
 
 A simplified payment processing platform built for the Argyle senior engineer
-take-home. This repository currently contains **Phase 1**: the thin vertical
-slice that proves the spine works end-to-end. State-machine endpoints, the
-async settlement worker, the React dashboard, and the full OpenTelemetry
-wiring land in later phases (see [What's next](#whats-next)).
+take-home. This repository contains **Phases 1 and 2**: the vertical slice
+that proves the spine works end-to-end (Phase 1) and the full payment state
+machine with capture, refund, list, and per-transition audit events (Phase
+2). The async settlement worker, the React dashboard, and the full
+OpenTelemetry wiring land in later phases (see [What's next](#whats-next)).
 
 The exercise brief lives at [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 The implementation plan lives under [`.claude/plans/`](.claude/plans).
@@ -13,24 +14,31 @@ The implementation plan lives under [`.claude/plans/`](.claude/plans).
 
 ## What's built right now
 
-| Capability                                                  | Phase 1 |
-| ----------------------------------------------------------- | :-----: |
-| `POST /v1/payments` (create, persisted, returns `pay_…` ULID) |   ✅    |
-| `GET /v1/payments/{id}` (own-merchant only, cross-tenant 404) |   ✅    |
-| `Idempotency-Key` header — replay returns identical body     |   ✅    |
-| Dev bearer auth (SHA-256 hash of seeded merchant key)        |   ✅    |
-| Structured JSON logs with `request_id` + `merchant_id`       |   ✅    |
-| `X-Request-Id` response header (echoed from request or new ULID) | ✅    |
-| `card_token` redaction (never logged)                        |   ✅    |
-| `GET /health/live`                                           |   ✅    |
-| Postgres 16 + EF Core 10 migration, seeded with two merchants |  ✅    |
-| Integration tests over real Postgres via Testcontainers      |   ✅    |
-| State transitions, `capture`, `refund`, `list/search`        |   ❌ (Phase 2) |
-| Async settlement worker (RabbitMQ + outbox)                  |   ❌ (Phase 3) |
-| OpenTelemetry traces + Prometheus metrics                    |   ❌ (Phase 4) |
-| React dashboard                                              |   ❌ (Phase 5) |
+| Capability                                                       | Phase |
+| ---------------------------------------------------------------- | :---: |
+| `POST /v1/payments` (create, persisted, returns `pay_…` ULID)    |   1   |
+| `GET /v1/payments/{id}` (own-merchant only, cross-tenant 404)    |   1   |
+| `Idempotency-Key` header — replay returns identical body         |   1   |
+| Per-operation idempotency scoping (`create` / `capture` / `refund`) |   2   |
+| Dev bearer auth (SHA-256 hash of seeded merchant key)            |   1   |
+| Structured JSON logs with `request_id` + `merchant_id` + `trace_id` |   1+2 |
+| `X-Request-Id` response header AND `request_id` in error body    |   1+2 |
+| `card_token` redaction (never logged)                            |   1   |
+| `GET /health/live`                                               |   1   |
+| Postgres 16 + EF Core 10 migrations, seeded with two merchants   |   1+2 |
+| Integration tests over real Postgres via Testcontainers          |   1+2 |
+| `Payment` aggregate with state machine + invalid-transition guards |  2   |
+| `POST /v1/payments/{id}/capture` (Authorized → Captured)         |   2   |
+| `POST /v1/payments/{id}/refund` (Captured/Settled → Refunded)    |   2   |
+| `GET /v1/payments?status=&limit=&cursor=` cursor pagination       |   2   |
+| `payment_events` audit table populated on every transition       |   2   |
+| Optimistic concurrency via `payments.version`                    |   2   |
+| Lifecycle event timeline returned by `GET /v1/payments/{id}`     |   2   |
+| Async settlement worker (RabbitMQ + outbox)                      |   3   |
+| OpenTelemetry traces + Prometheus metrics                        |   4   |
+| React dashboard                                                  |   5   |
 
-The intent of Phase 1 is operational depth on a small surface, not breadth.
+Phases 1 and 2 prioritize operational depth on a small surface, not breadth.
 
 ---
 
@@ -118,6 +126,124 @@ will pin that id end-to-end.
 
 ---
 
+## Phase 2 endpoints
+
+Phase 2 adds three endpoints on top of the Phase 1 spine. All three reuse the
+same `Idempotency-Key` header contract and return the same `PaymentResponse`
+shape — now extended with `events[]` (the per-transition audit timeline) and
+`updated_at`. A live capture of these steps lives at
+[`docs/acceptance/phase-2-walkthrough.md`](docs/acceptance/phase-2-walkthrough.md).
+
+The Phase 2 acceptance walk assumes a payment is already in `Authorized`
+(Phase 3's worker performs that transition; for now we drive it via psql,
+matching the shape the worker will use):
+
+```bash
+# Seed a Pending payment
+RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
+PID=$(echo "$RESP" | jq -r .id)
+
+# Phase 3 stand-in: drive Pending → Authorized
+docker compose exec postgres psql -U postgres payments -c \
+  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';
+   INSERT INTO payment_events (id, payment_id, from_status, to_status, actor, reason, payload, at)
+   VALUES ('evt_' || lower(replace(gen_random_uuid()::text, '-', '')),
+           '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
+
+# Capture (Authorized → Captured)
+curl -s -X POST http://localhost:5000/v1/payments/$PID/capture \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" -d '{}' | jq .
+# → 200, status: "Captured", events array has 3 entries
+
+# Refund (Captured → Refunded)
+curl -s -X POST http://localhost:5000/v1/payments/$PID/refund \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"customer_request"}' | jq .
+# → 200, status: "Refunded", events array has 4 entries
+
+# Attempting to capture a Captured payment → 409 invalid_state_transition
+curl -i -X POST http://localhost:5000/v1/payments/$PID/capture \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" -d '{}'
+
+# List with status filter and cursor pagination
+curl -s "http://localhost:5000/v1/payments?status=Refunded&limit=10" \
+  -H "Authorization: Bearer dev-key-mrc-acme" | jq .
+# → { data: [...], next_cursor: null }
+```
+
+Replays are byte-identical: the same `Idempotency-Key` + same body returns
+the cached `PaymentResponse` without re-running the transition. A different
+body with the same key returns `409 idempotency_key_conflict`. A different
+key against a payment already past the legal transition returns `409
+invalid_state_transition`.
+
+---
+
+## Payment state machine
+
+Phase 2's `Payment` aggregate enforces every transition. Illegal transitions
+throw `InvalidTransitionException` and surface as `409 invalid_state_transition`.
+
+```
+                         POST /v1/payments
+                                │
+                                ▼
+                          ┌─────────┐
+                          │ Pending │
+                          └────┬────┘
+                  Authorize    │    Fail
+            (Phase 3 worker)   ├────────────┐
+                               ▼            ▼
+                       ┌────────────┐   ┌────────┐
+                       │ Authorized │   │ Failed │
+                       └────┬───────┘   └────────┘
+                            │     ▲
+            POST /capture   │     │  Fail
+                            ▼     │
+                       ┌──────────┴─┐
+                       │  Captured  │
+                       └────┬───────┘
+              Settle        │     POST /refund
+        (Phase 3 worker)    ├────────────┐
+                            ▼            │
+                       ┌─────────┐       │
+                       │ Settled │       │
+                       └────┬────┘       │
+                            │            │
+              POST /refund  │            │
+                            ▼            ▼
+                       ┌──────────────────┐
+                       │     Refunded     │
+                       └──────────────────┘
+```
+
+`Failed` and `Refunded` are terminal — no transitions leave them.
+
+Every transition writes a row to `payment_events`:
+
+| column        | meaning                                                |
+| ------------- | ------------------------------------------------------ |
+| `from_status` | The status before the transition. `null` only on the initial create event. |
+| `to_status`   | The status after the transition.                       |
+| `actor`       | Who drove it: `api` (the user-facing endpoint), `system` (the Phase 3 worker), or `worker` (background settlement). |
+| `reason`      | Domain-level reason code: `created`, `auth_ok`, `captured`, `settled`, `refunded`, `failed`. |
+| `payload`     | Optional structured context — e.g. `{"reason":"customer_request"}` on refunds. |
+| `at`          | Timestamp from `IClock.UtcNow`.                        |
+
+`GET /v1/payments/{id}` returns the timeline ordered by `at` ascending.
+
+---
+
 ## Architecture
 
 ### High level
@@ -165,8 +291,8 @@ backend/
 │   ├── PaymentPlatform.Infrastructure    # EF Core DbContext + configurations + migration, idempotency store, SystemClock
 │   └── PaymentPlatform.Contracts         # Public DTOs (request / response shapes, error envelope)
 └── tests/
-    ├── PaymentPlatform.UnitTests         # 61 tests — domain, validators, handlers
-    └── PaymentPlatform.IntegrationTests  # 16 tests — Testcontainers Postgres + WebApplicationFactory
+    ├── PaymentPlatform.UnitTests         # 124 tests — domain, state machine, validators, handlers
+    └── PaymentPlatform.IntegrationTests  # 56 tests — Testcontainers Postgres + WebApplicationFactory
 ```
 
 Reference direction (no cycles):
@@ -178,26 +304,32 @@ Reference direction (no cycles):
 ### Data model (Phase 1 subset)
 
 - `merchants(id, name, api_key_hash, created_at)` — seeded with two rows.
-- `payments(id, merchant_id, status, amount_minor, currency, customer_reference, card_token, metadata, created_at, updated_at, version)` — Phase 1 inserts with `status = 'Pending'`; transitions land in Phase 2.
-- `idempotency_keys(merchant_id, key, request_hash, response_json, created_at)` — composite PK `(merchant_id, key)`. Replay returns the cached `response_json`.
+- `payments(id, merchant_id, status, amount_minor, currency, customer_reference, card_token, metadata, created_at, updated_at, version)` — `status` walks the state machine (see [State machine](#payment-state-machine)); `version` backs optimistic concurrency on capture / refund.
+- `payment_events(id, payment_id, from_status, to_status, actor, reason, payload, at)` — append-only audit log, populated on every transition (including the initial `null → Pending` event on create). `payload` is JSONB.
+- `idempotency_keys(merchant_id, operation, key, request_hash, response_json, created_at)` — composite PK `(merchant_id, operation, key)`. Replay returns the cached `response_json`. The `operation` column is what makes per-operation key reuse safe.
 
-The `(merchant_id, created_at DESC, id DESC)` index on `payments` is built
-now for Phase 2's cursor pagination — it costs nothing on writes at Phase 1
-volume and removes a future migration.
+The `(merchant_id, created_at DESC, id DESC)` index on `payments` powers
+the Phase 2 list endpoint's cursor pagination.
 
 ### Idempotency
 
 Two layers:
 
-1. **Application-level cache:** `IIdempotencyStore` looks up `(merchant_id, key)` before
-   the handler runs. A hit returns the cached response body verbatim, with the
-   endpoint re-applying `201 Created`.
-2. **Database-level guard:** unique constraint on `(merchant_id, key)`. If two
+1. **Application-level cache:** `IIdempotencyStore` looks up `(merchant_id, operation, key)`
+   before the handler runs. A hit returns the cached response body verbatim, with the
+   endpoint re-applying the original status code (e.g. `201 Created` for create,
+   `200 OK` for capture and refund).
+2. **Database-level guard:** unique constraint on `(merchant_id, operation, key)`. If two
    concurrent requests race past the lookup, the loser catches Npgsql
    `DbUpdateException` (SQLSTATE `23505`) and falls into the replay branch.
 
+Phase 2 added the `operation` column to that primary key — so the same
+`Idempotency-Key` string can safely be reused across `create_payment`,
+`capture_payment`, and `refund_payment` without collision. The rationale and
+migration shape live in [`docs/adr/0007-idempotency-keys-per-operation.md`](docs/adr/0007-idempotency-keys-per-operation.md).
+
 The body is hashed on insert. A future request with the same key but a
-different body should fail loudly (Phase 2 enforces this as a `409`).
+different body fails loudly as `409 idempotency_key_conflict`.
 
 ### Logging
 
@@ -240,7 +372,7 @@ they're dev affordances for the take-home.
 
 ```bash
 cd backend
-dotnet test                    # 77 tests: 61 unit + 16 integration
+dotnet test                    # 180 tests: 124 unit + 56 integration
 dotnet test --filter "FullyQualifiedName~UnitTests"          # unit only — no Docker required
 dotnet test --filter "FullyQualifiedName~IntegrationTests"   # needs Docker running
 ```
@@ -328,11 +460,9 @@ is the most important.
 
 Phases planned in [`.claude/plans/payment-platform.plan.md` §13](.claude/plans/payment-platform.plan.md):
 
-- **Phase 2** — Payment state machine, `capture`, `refund`, `list/search` with
-  cursor pagination, `payment_events` audit table, full idempotency on every
-  state-changing endpoint.
 - **Phase 3** — Async settlement worker via RabbitMQ, transactional outbox,
-  configurable failure modes on the stub processor, DLQ.
+  configurable failure modes on the stub processor, DLQ. Replaces the Phase 2
+  walkthrough's psql-driven `Pending → Authorized` step with a real worker.
 - **Phase 4** — OpenTelemetry across API + worker, `/metrics`, `/health/ready`,
   log redaction enricher, ADRs.
 - **Phase 5** — React + Vite dashboard with list view, status filter, cursor
