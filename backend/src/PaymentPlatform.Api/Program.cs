@@ -3,6 +3,7 @@ using PaymentPlatform.Api;
 using PaymentPlatform.Api.Configuration;
 using PaymentPlatform.Api.Diagnostics;
 using PaymentPlatform.Api.Endpoints;
+using PaymentPlatform.Api.HealthChecks;
 using PaymentPlatform.Api.HostedServices;
 using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Infrastructure;
@@ -30,6 +31,7 @@ try
     builder.Services.AddApiServices();
     builder.Services.AddInfrastructure(builder.Configuration);
     builder.Services.AddPaymentMessagingPublisher(builder.Configuration);
+    builder.Services.AddSingleton<RabbitMqHealthProbe>();
 
     builder.Services
         .AddOptions<OutboxDispatcherOptions>()

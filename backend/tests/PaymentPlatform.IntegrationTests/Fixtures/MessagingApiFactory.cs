@@ -12,10 +12,12 @@ namespace PaymentPlatform.IntegrationTests.Fixtures;
 public sealed class MessagingApiFactory : WebApplicationFactory<Program>
 {
     private readonly MessagingFixture _fixture;
+    private readonly int? _rabbitMqPortOverride;
 
-    public MessagingApiFactory(MessagingFixture fixture)
+    public MessagingApiFactory(MessagingFixture fixture, int? rabbitMqPortOverride = null)
     {
         _fixture = fixture;
+        _rabbitMqPortOverride = rabbitMqPortOverride;
     }
 
     public InMemoryLogSink LogSink { get; } = new();
@@ -29,7 +31,9 @@ public sealed class MessagingApiFactory : WebApplicationFactory<Program>
     {
         Environment.SetEnvironmentVariable("ConnectionStrings__Payments", _fixture.Postgres.ConnectionString);
         Environment.SetEnvironmentVariable("RabbitMq__Host", _fixture.RabbitMq.Host);
-        Environment.SetEnvironmentVariable("RabbitMq__Port", _fixture.RabbitMq.Port.ToString());
+        Environment.SetEnvironmentVariable(
+            "RabbitMq__Port",
+            (_rabbitMqPortOverride ?? _fixture.RabbitMq.Port).ToString());
         Environment.SetEnvironmentVariable("RabbitMq__Username", _fixture.RabbitMq.Username);
         Environment.SetEnvironmentVariable("RabbitMq__Password", _fixture.RabbitMq.Password);
         Environment.SetEnvironmentVariable(
