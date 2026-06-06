@@ -10,6 +10,7 @@ using PaymentPlatform.Infrastructure;
 using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Messaging;
 using PaymentPlatform.Infrastructure.Persistence;
+using Prometheus;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -52,10 +53,13 @@ try
     app.UseMiddleware<ExceptionHandlingMiddleware>();
     app.UseMiddleware<CorrelationIdMiddleware>();
     app.UseSerilogRequestLogging();
+    app.UseRouting();
+    app.UseHttpMetrics();
     app.UseMiddleware<DevBearerAuthMiddleware>();
 
     app.MapHealthEndpoints();
     app.MapPaymentsEndpoints();
+    app.MapMetricsEndpoint();
 
     app.Run();
 }
