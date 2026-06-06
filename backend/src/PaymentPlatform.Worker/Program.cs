@@ -36,6 +36,10 @@ try
     builder.Services.AddSingleton<StubPaymentProcessor>();
     builder.Services.AddSingleton<IPaymentProcessor>(sp => sp.GetRequiredService<StubPaymentProcessor>());
 
+    var retryOptions = builder.Configuration
+        .GetSection(WorkerRetryOptions.SectionName)
+        .Get<WorkerRetryOptions>() ?? new WorkerRetryOptions();
+
     builder.Services.AddMassTransit(cfg =>
     {
         cfg.AddConsumer<SettlePaymentConsumer>();
@@ -57,7 +61,7 @@ try
 
             rmq.ReceiveEndpoint(SettlementQueues.Queue, e =>
             {
-                e.ConfigureConsumer<SettlePaymentConsumer>(context);
+                e.ConfigureSettlementEndpoint(context, retryOptions);
             });
         });
     });
