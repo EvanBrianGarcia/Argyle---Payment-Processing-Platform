@@ -89,7 +89,7 @@ public sealed class PaymentConfiguration : IEntityTypeConfiguration<Payment>
             .HasDefaultValueSql("now()")
             .IsRequired();
 
-        builder.Property<DateTimeOffset>("UpdatedAt")
+        builder.Property(p => p.UpdatedAt)
             .HasColumnName("updated_at")
             .HasColumnType("timestamptz")
             .HasDefaultValueSql("now()")
