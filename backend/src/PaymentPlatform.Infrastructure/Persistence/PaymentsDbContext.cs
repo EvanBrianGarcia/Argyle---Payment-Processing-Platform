@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Domain.Idempotency;
 using PaymentPlatform.Domain.Merchants;
+using PaymentPlatform.Domain.Outbox;
 using PaymentPlatform.Domain.Payments;
 
 namespace PaymentPlatform.Infrastructure.Persistence;
@@ -16,6 +17,7 @@ public sealed class PaymentsDbContext : DbContext, IPaymentsDbContext
     public DbSet<PaymentEvent> PaymentEvents => Set<PaymentEvent>();
     public DbSet<Merchant> Merchants => Set<Merchant>();
     public DbSet<IdempotencyKeyRecord> IdempotencyKeys => Set<IdempotencyKeyRecord>();
+    public DbSet<PaymentOutboxMessage> PaymentOutbox => Set<PaymentOutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

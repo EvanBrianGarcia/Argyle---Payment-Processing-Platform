@@ -5,7 +5,7 @@ namespace PaymentPlatform.IntegrationTests.Fixtures;
 public sealed class PostgresFixture : IAsyncLifetime
 {
     private const string ResetSql =
-        "TRUNCATE TABLE payment_events, payments, idempotency_keys RESTART IDENTITY CASCADE;";
+        "TRUNCATE TABLE payment_outbox, payment_events, payments, idempotency_keys RESTART IDENTITY CASCADE;";
 
     private const string DbUser = "postgres";
     private const string DbPassword = "postgres";

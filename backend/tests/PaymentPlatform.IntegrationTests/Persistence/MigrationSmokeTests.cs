@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Domain.Common;
 using PaymentPlatform.Domain.Idempotency;
+using PaymentPlatform.Domain.Outbox;
 using PaymentPlatform.Domain.Payments;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.IntegrationTests.Fixtures;
@@ -138,6 +139,95 @@ public sealed class MigrationSmokeTests : IntegrationTestBase
 
         var act = async () => await secondDb.SaveChangesAsync();
         await act.Should().ThrowAsync<DbUpdateException>();
+    }
+
+    [Fact]
+    public async Task PaymentOutbox_RoundTrips_AllColumnsIncludingJsonbPayloadAndCorrelationId()
+    {
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+
+        var payment = SeedPayment(db);
+        await db.SaveChangesAsync();
+
+        var message = PaymentOutboxMessage.Create(
+            aggregateId: payment.Id,
+            messageType: OutboxMessageType.Settlement,
+            payload: """{"payment_id":"pay_test","amount_minor":1000}""",
+            correlationId: "trace-abc-123",
+            createdAt: Now);
+
+        db.PaymentOutbox.Add(message);
+        await db.SaveChangesAsync();
+
+        message.Id.Should().BeGreaterThan(0);
+
+        using var verifyScope = Factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        var loaded = await verifyDb.PaymentOutbox
+            .AsNoTracking()
+            .SingleAsync(o => o.Id == message.Id);
+
+        loaded.AggregateId.Should().Be(payment.Id);
+        loaded.MessageType.Should().Be(OutboxMessageType.Settlement);
+        loaded.Payload.Should().Contain("payment_id");
+        loaded.Payload.Should().Contain("amount_minor");
+        loaded.CorrelationId.Should().Be("trace-abc-123");
+        loaded.CreatedAt.Should().BeCloseTo(Now, TimeSpan.FromSeconds(1));
+        loaded.DispatchedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PaymentOutbox_PartialIndex_OnlyReturnsUndispatchedRowsForUndispatchedQueries()
+    {
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+
+        var payment = SeedPayment(db);
+        await db.SaveChangesAsync();
+
+        var undispatched = PaymentOutboxMessage.Create(
+            aggregateId: payment.Id,
+            messageType: OutboxMessageType.Settlement,
+            payload: "{}",
+            correlationId: "trace-undispatched",
+            createdAt: Now);
+
+        var dispatched = PaymentOutboxMessage.Create(
+            aggregateId: payment.Id,
+            messageType: OutboxMessageType.Settlement,
+            payload: "{}",
+            correlationId: "trace-dispatched",
+            createdAt: Now);
+
+        db.PaymentOutbox.AddRange(undispatched, dispatched);
+        await db.SaveChangesAsync();
+
+        // Flip the second row's dispatched_at via ExecuteUpdateAsync — the same
+        // pattern the OutboxDispatcher will use in Task 4.
+        var dispatchedAt = Now.AddSeconds(5);
+        await db.PaymentOutbox
+            .Where(o => o.Id == dispatched.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(o => o.DispatchedAt, dispatchedAt));
+
+        using var verifyScope = Factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+
+        var undispatchedRows = await verifyDb.PaymentOutbox
+            .AsNoTracking()
+            .Where(o => o.DispatchedAt == null)
+            .ToListAsync();
+
+        undispatchedRows.Should().HaveCount(1);
+        undispatchedRows[0].Id.Should().Be(undispatched.Id);
+
+        var allRows = await verifyDb.PaymentOutbox
+            .AsNoTracking()
+            .OrderBy(o => o.Id)
+            .ToListAsync();
+        allRows.Should().HaveCount(2);
+        allRows[1].DispatchedAt.Should().BeCloseTo(dispatchedAt, TimeSpan.FromSeconds(1));
     }
 
     private static Payment SeedPayment(IPaymentsDbContext db)

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Domain.Idempotency;
 using PaymentPlatform.Domain.Merchants;
+using PaymentPlatform.Domain.Outbox;
 using PaymentPlatform.Domain.Payments;
 
 namespace PaymentPlatform.Application.Abstractions;
@@ -11,6 +12,7 @@ public interface IPaymentsDbContext
     DbSet<PaymentEvent> PaymentEvents { get; }
     DbSet<Merchant> Merchants { get; }
     DbSet<IdempotencyKeyRecord> IdempotencyKeys { get; }
+    DbSet<PaymentOutboxMessage> PaymentOutbox { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
