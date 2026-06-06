@@ -108,9 +108,13 @@ describe('PaymentDetailPage — Not Found', () => {
 
 describe('PaymentDetailPage — Copy as curl', () => {
   it('writes a curl command to the clipboard', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
     const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      writable: true,
+      configurable: true,
+    });
     renderDetail(fixturePayment('pay_01H8XK2L000000000000000002').id);
     const copyButton = await screen.findByRole('button', { name: /Copy as curl/i });
     await user.click(copyButton);

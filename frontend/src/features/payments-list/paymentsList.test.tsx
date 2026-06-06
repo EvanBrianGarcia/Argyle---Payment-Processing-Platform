@@ -58,9 +58,9 @@ describe('PaymentsListPage', () => {
       ),
     );
     renderListPage();
-    const status = await screen.findAllByRole('status');
-    const empty = status.find((el) => el.textContent?.includes('No payments match this filter'));
-    expect(empty).toBeDefined();
+    expect(
+      await screen.findByText('No payments match this filter.'),
+    ).toBeInTheDocument();
   });
 
   it('renders the error envelope when the backend returns 5xx', async () => {
@@ -87,9 +87,10 @@ describe('PaymentsListPage', () => {
   });
 
   it('renders the status rail with the active status highlighted', async () => {
-    renderListPage('/payments?status=failed');
+    renderListPage('/payments?status=Failed');
+    const rail = await screen.findByRole('region', { name: 'Payment status overview' });
     await waitFor(() => {
-      const failedTile = screen.getByRole('button', { name: /Failed/, pressed: true });
+      const failedTile = within(rail).getByRole('button', { name: /Failed/, pressed: true });
       expect(failedTile).toBeInTheDocument();
     });
   });

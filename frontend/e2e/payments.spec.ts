@@ -4,13 +4,6 @@ import AxeBuilder from '@axe-core/playwright';
 const BACKEND_URL = process.env.E2E_API_BASE_URL ?? 'http://localhost:8080';
 const BEARER = process.env.E2E_BEARER_TOKEN ?? 'dev-key-mrc-acme';
 
-async function seedPayments(request: typeof test extends infer T ? T : never): Promise<string> {
-  // Best-effort seed. If the backend is up, create a payment so the list
-  // has something deterministic to show. The test still works against the
-  // existing seeded merchant fixtures if seeding fails.
-  return 'seeded';
-}
-
 test.beforeAll(async ({ request }) => {
   // Probe readiness — fail fast if the backend isn't reachable.
   let ready = false;

@@ -14,6 +14,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    env: {
+      VITE_API_BASE_URL: 'http://localhost:8080',
+      VITE_DEV_BEARER_TOKEN: 'dev-key-mrc-acme',
+      VITE_ENV_LABEL: 'test',
+    },
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
