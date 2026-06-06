@@ -1,0 +1,12 @@
+@import url('https://rsms.me/inter/inter.css');
+
+body {
+  font: var(--text-body-md);
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  font-variant-numeric: tabular-nums;
+  color: var(--color-on-surface);
+}
+
+code, pre, kbd, samp {
+  font: var(--text-code-md);
+}

@@ -39,6 +39,23 @@ try
     builder.Services.AddSingleton<RabbitMqHealthProbe>();
     builder.Services.AddPaymentsTelemetry(builder.Configuration, "PaymentPlatform.Api");
 
+    builder.Services.AddOpenApi("v1");
+
+    const string FrontendDevCorsPolicy = "frontend-dev";
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy(FrontendDevCorsPolicy, policy =>
+        {
+            var origins = builder.Configuration
+                .GetSection("Cors:FrontendDevOrigins")
+                .Get<string[]>() ?? ["http://localhost:5173"];
+            policy.WithOrigins(origins)
+                .WithMethods("GET", "POST", "OPTIONS")
+                .WithHeaders("Authorization", "Content-Type", "Idempotency-Key")
+                .WithExposedHeaders("traceparent");
+        });
+    });
+
     builder.Services.Configure<RedactionOptions>(
         builder.Configuration.GetSection(RedactionOptions.SectionName));
     builder.Services.AddSingleton<RedactingEnricher>();
@@ -63,12 +80,21 @@ try
     app.UseMiddleware<TraceparentResponseHeaderMiddleware>();
     app.UseSerilogRequestLogging();
     app.UseRouting();
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseCors(FrontendDevCorsPolicy);
+    }
     app.UseHttpMetrics();
     app.UseMiddleware<DevBearerAuthMiddleware>();
 
     app.MapHealthEndpoints();
     app.MapPaymentsEndpoints();
     app.MapMetricsEndpoint();
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.MapOpenApi("/openapi/{documentName}.json");
+    }
 
     app.Run();
 }

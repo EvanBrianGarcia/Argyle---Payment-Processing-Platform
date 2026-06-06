@@ -6,6 +6,7 @@ using PaymentPlatform.Application.Features.CreatePayment;
 using PaymentPlatform.Application.Features.GetPayment;
 using PaymentPlatform.Application.Features.ListPayments;
 using PaymentPlatform.Application.Features.RefundPayment;
+using PaymentPlatform.Contracts.Common;
 using PaymentPlatform.Contracts.Payments;
 using PaymentPlatform.Domain.Payments;
 using AppValidationException = PaymentPlatform.Application.Common.ValidationException;
@@ -16,15 +17,53 @@ namespace PaymentPlatform.Api.Endpoints;
 
 public static class PaymentsEndpoints
 {
+    private const string TagName = "Payments";
+
     public static IEndpointRouteBuilder MapPaymentsEndpoints(this IEndpointRouteBuilder routes)
     {
-        var group = routes.MapGroup("/v1/payments");
+        var group = routes.MapGroup("/v1/payments").WithTags(TagName);
 
-        group.MapPost("/", CreatePaymentAsync);
-        group.MapGet("/", ListPaymentsAsync);
-        group.MapGet("/{id}", GetPaymentAsync);
-        group.MapPost("/{id}/capture", CapturePaymentAsync);
-        group.MapPost("/{id}/refund", RefundPaymentAsync);
+        group.MapPost("/", CreatePaymentAsync)
+            .WithName("createPayment")
+            .WithSummary("Create a payment")
+            .WithDescription("Creates a new payment in Pending state. Requires an Idempotency-Key header.")
+            .Produces<PaymentResponse>(StatusCodes.Status201Created)
+            .Produces<ErrorEnvelope>(StatusCodes.Status400BadRequest)
+            .Produces<ErrorEnvelope>(StatusCodes.Status401Unauthorized);
+
+        group.MapGet("/", ListPaymentsAsync)
+            .WithName("listPayments")
+            .WithSummary("List payments")
+            .WithDescription("Cursor-paginated list of payments scoped to the calling merchant. Optional status filter.")
+            .Produces<PaymentListResponse>(StatusCodes.Status200OK)
+            .Produces<ErrorEnvelope>(StatusCodes.Status400BadRequest)
+            .Produces<ErrorEnvelope>(StatusCodes.Status401Unauthorized);
+
+        group.MapGet("/{id}", GetPaymentAsync)
+            .WithName("getPayment")
+            .WithSummary("Get a payment by id")
+            .WithDescription("Returns the payment and its full event timeline.")
+            .Produces<PaymentResponse>(StatusCodes.Status200OK)
+            .Produces<ErrorEnvelope>(StatusCodes.Status404NotFound)
+            .Produces<ErrorEnvelope>(StatusCodes.Status401Unauthorized);
+
+        group.MapPost("/{id}/capture", CapturePaymentAsync)
+            .WithName("capturePayment")
+            .WithSummary("Capture a payment")
+            .WithDescription("Transitions an Authorized payment to Captured. Settlement runs asynchronously.")
+            .Produces<PaymentResponse>(StatusCodes.Status200OK)
+            .Produces<ErrorEnvelope>(StatusCodes.Status400BadRequest)
+            .Produces<ErrorEnvelope>(StatusCodes.Status404NotFound)
+            .Produces<ErrorEnvelope>(StatusCodes.Status409Conflict);
+
+        group.MapPost("/{id}/refund", RefundPaymentAsync)
+            .WithName("refundPayment")
+            .WithSummary("Refund a payment")
+            .WithDescription("Refunds a Settled or Captured payment.")
+            .Produces<PaymentResponse>(StatusCodes.Status200OK)
+            .Produces<ErrorEnvelope>(StatusCodes.Status400BadRequest)
+            .Produces<ErrorEnvelope>(StatusCodes.Status404NotFound)
+            .Produces<ErrorEnvelope>(StatusCodes.Status409Conflict);
 
         return routes;
     }

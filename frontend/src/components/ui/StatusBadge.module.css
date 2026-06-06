@@ -1,0 +1,57 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-label-md);
+  letter-spacing: var(--text-label-md-spacing);
+  text-transform: uppercase;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.size-sm { padding: 2px 8px; font-size: 11px; }
+.size-md { padding: 4px 10px; }
+.size-lg { padding: 6px 14px; font-size: 13px; }
+
+.settled {
+  color: var(--color-status-settled);
+  background: var(--color-status-settled-bg);
+}
+
+.failed {
+  color: var(--color-status-failed);
+  background: var(--color-status-failed-bg);
+}
+
+.refunded {
+  color: var(--color-status-refunded);
+  background: var(--color-status-refunded-bg);
+}
+
+.pending {
+  color: var(--color-status-pending);
+  background: transparent;
+  border-color: var(--color-status-pending-border);
+}
+
+.authorized {
+  color: var(--color-status-authorized);
+  background: var(--color-status-authorized-bg);
+  border-color: var(--color-status-authorized);
+}
+
+.captured {
+  color: var(--color-status-captured);
+  background: var(--color-status-captured-bg);
+  border-color: var(--color-status-captured);
+}

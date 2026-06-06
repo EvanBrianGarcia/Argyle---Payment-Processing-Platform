@@ -1,0 +1,118 @@
+.nav {
+  background: var(--color-surface-container-lowest);
+  border-bottom: 1px solid var(--color-divider);
+  height: 64px;
+  display: flex;
+  align-items: center;
+}
+
+.inner {
+  width: 100%;
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  justify-self: start;
+  margin-left: var(--space-7);
+}
+
+.link {
+  font: 500 14px/1.4 var(--font-sans);
+  color: var(--color-text-secondary);
+  padding: var(--space-2) 0;
+  border-bottom: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-out-expo);
+}
+
+.link:hover {
+  color: var(--color-on-surface);
+  text-decoration: none;
+}
+
+.linkActive {
+  color: var(--color-on-surface);
+  font-weight: 600;
+  border-bottom-color: var(--color-primary-container);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3);
+  width: 280px;
+  height: 36px;
+  gap: var(--space-2);
+}
+
+.search:focus-within {
+  border-color: var(--color-primary-container);
+  background: var(--color-surface-container-lowest);
+}
+
+.searchIcon {
+  color: var(--color-text-muted);
+  font-size: 16px;
+}
+
+.searchInput {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--color-on-surface);
+  font: var(--text-body-md);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-muted);
+}
+
+.kbd {
+  background: var(--color-surface-container);
+  color: var(--color-text-secondary);
+  border-radius: var(--radius-xs);
+  padding: 1px 6px;
+  font: var(--text-code-sm);
+  border: 1px solid var(--color-divider);
+}
+
+.envPill {
+  background: var(--color-surface-subtle);
+  color: var(--color-secondary);
+  font: var(--text-label-md);
+  letter-spacing: var(--text-label-md-spacing);
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--color-secondary-container);
+  color: var(--color-on-secondary-container);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 13px/1 var(--font-sans);
+}

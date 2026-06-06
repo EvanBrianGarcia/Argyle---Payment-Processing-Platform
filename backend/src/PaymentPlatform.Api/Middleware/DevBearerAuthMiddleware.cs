@@ -28,7 +28,9 @@ public sealed class DevBearerAuthMiddleware
         IPaymentsDbContext db,
         CurrentMerchant currentMerchant)
     {
-        if (IsHealthPath(context.Request.Path) || IsMetricsPath(context.Request.Path))
+        if (IsHealthPath(context.Request.Path)
+            || IsMetricsPath(context.Request.Path)
+            || IsOpenApiPath(context.Request.Path))
         {
             await _next(context);
             return;
@@ -67,6 +69,9 @@ public sealed class DevBearerAuthMiddleware
 
     private static bool IsMetricsPath(PathString path) =>
         path.StartsWithSegments("/metrics", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsOpenApiPath(PathString path) =>
+        path.StartsWithSegments("/openapi", StringComparison.OrdinalIgnoreCase);
 
     private static string? ExtractBearerToken(HttpContext context)
     {

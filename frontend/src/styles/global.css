@@ -1,0 +1,32 @@
+body {
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+main {
+  outline: none;
+  min-height: calc(100dvh - 4px - 64px);
+}
+
+a {
+  color: var(--color-primary-container);
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[tabindex="0"]:focus-visible {
+  outline: 2px solid var(--color-primary-container);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Selection */
+::selection {
+  background: var(--color-surface-subtle);
+  color: var(--color-on-surface);
+}

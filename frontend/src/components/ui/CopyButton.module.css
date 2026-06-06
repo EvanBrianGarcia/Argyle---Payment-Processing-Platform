@@ -1,0 +1,29 @@
+.button {
+  font: var(--text-label-md);
+  letter-spacing: var(--text-label-md-spacing);
+  text-transform: uppercase;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.secondary {
+  background: var(--color-surface-container-lowest);
+  border: 1px solid var(--color-primary-container);
+  color: var(--color-primary-container);
+}
+
+.secondary:hover {
+  background: var(--color-surface-subtle);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--color-primary-container);
+  text-transform: none;
+  font: 500 13px/1.4 var(--font-sans);
+}
+
+.ghost:hover {
+  text-decoration: underline;
+}

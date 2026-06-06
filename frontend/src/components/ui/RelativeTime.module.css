@@ -1,0 +1,6 @@
+.time {
+  color: var(--color-text-secondary);
+  text-decoration: underline dotted var(--color-text-muted);
+  text-underline-offset: 3px;
+  cursor: help;
+}

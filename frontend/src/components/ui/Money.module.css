@@ -1,0 +1,22 @@
+.money {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-on-surface);
+}
+
+.number { font-weight: 600; }
+.dot { padding: 0 1px; }
+.fractional { }
+
+.currency {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.size-sm { font: var(--text-body-sm); }
+.size-md { font: var(--text-body-md); }
+.size-lg .number { font: 700 40px/48px var(--font-sans); letter-spacing: -0.02em; }
+.size-lg .currency { font: var(--text-headline-sm); }

@@ -1,0 +1,113 @@
+/* Argyle Operations System — design tokens.
+   Source of truth: stitch/argyle_operations_system/DESIGN.md.
+   See ADR-0015 for the rationale and docs/visual-direction.md for usage. */
+
+:root {
+  /* Surfaces */
+  --color-surface: #FCF8FF;
+  --color-surface-bright: #FCF8FF;
+  --color-surface-dim: #DAD7F2;
+  --color-surface-container-lowest: #FFFFFF;
+  --color-surface-container-low: #F5F2FF;
+  --color-surface-container: #EFECFF;
+  --color-surface-container-high: #E8E5FF;
+  --color-surface-container-highest: #E2E0FA;
+  --color-surface-secondary: #F7F7FB;
+  --color-surface-subtle: #EDECF7;
+
+  /* Text */
+  --color-on-surface: #1A1A2D;
+  --color-on-surface-variant: #474650;
+  --color-text-secondary: #5A5A75;
+  --color-text-muted: #9494AB;
+
+  /* Brand */
+  --color-primary: #282662;
+  --color-primary-container: #3F3D7A;
+  --color-on-primary: #FFFFFF;
+  --color-on-primary-container: #ADABF0;
+  --color-secondary: #5B5893;
+  --color-secondary-container: #BFBAFD;
+  --color-on-secondary-container: #4B4882;
+  --color-brand-pattern-indigo: #201B51;
+
+  /* Status */
+  --color-status-settled: #16A34A;
+  --color-status-settled-bg: #E8F7EE;
+  --color-status-failed: #DC2626;
+  --color-status-failed-bg: #FCEBEB;
+  --color-status-refunded: #D97706;
+  --color-status-refunded-bg: #FEF3E2;
+  --color-status-pending: #5A5A75;
+  --color-status-pending-border: #CBD5E1;
+  --color-status-authorized: #3F3D7A;
+  --color-status-authorized-bg: #EDECF7;
+  --color-status-captured: #16A34A;
+  --color-status-captured-bg: #E8F7EE;
+
+  /* Error */
+  --color-error: #BA1A1A;
+  --color-on-error: #FFFFFF;
+  --color-error-container: #FFDAD6;
+  --color-on-error-container: #93000A;
+
+  /* Structure */
+  --color-divider: #E6E6EE;
+  --color-outline: #787681;
+  --color-outline-variant: #C8C5D1;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --gutter: 24px;
+  --container-max: 1280px;
+
+  /* Radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgba(27, 27, 46, 0.05);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-normal: 220ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Consolas', 'Liberation Mono', monospace;
+
+  --text-display-lg: 700 32px/40px var(--font-sans);
+  --text-display-lg-spacing: -0.02em;
+  --text-headline-md: 600 24px/32px var(--font-sans);
+  --text-headline-md-spacing: -0.01em;
+  --text-headline-sm: 600 18px/24px var(--font-sans);
+  --text-body-lg: 400 16px/24px var(--font-sans);
+  --text-body-md: 400 14px/20px var(--font-sans);
+  --text-body-sm: 400 13px/18px var(--font-sans);
+  --text-label-md: 600 12px/16px var(--font-sans);
+  --text-label-md-spacing: 0.06em;
+  --text-code-md: 400 13px/20px var(--font-mono);
+  --text-code-sm: 400 11px/16px var(--font-mono);
+
+  /* Argyle pattern as an inline SVG data URL — a single diamond tile. */
+  --argyle-pattern: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 0 L24 12 L12 24 L0 12 Z' fill='%23ADABF0' fill-opacity='0.35'/><path d='M12 0 L24 12 L12 24 L0 12 Z' fill='none' stroke='%23ADABF0' stroke-opacity='0.6' stroke-width='0.5'/></svg>");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

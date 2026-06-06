@@ -1,0 +1,278 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "PaymentPlatform.Api",
+    "version": "v1"
+  },
+  "servers": [
+    { "url": "http://localhost:8080" }
+  ],
+  "paths": {
+    "/v1/payments": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Create a payment",
+        "operationId": "createPayment",
+        "parameters": [
+          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreatePaymentRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["Payments"],
+        "summary": "List payments",
+        "operationId": "listPayments",
+        "parameters": [
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentListResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payments/{id}": {
+      "get": {
+        "tags": ["Payments"],
+        "summary": "Get a payment by id",
+        "operationId": "getPayment",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payments/{id}/capture": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Capture a payment",
+        "operationId": "capturePayment",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CapturePaymentRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/payments/{id}/refund": {
+      "post": {
+        "tags": ["Payments"],
+        "summary": "Refund a payment",
+        "operationId": "refundPayment",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefundPaymentRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PaymentStatus": {
+        "type": "string",
+        "enum": ["Pending", "Authorized", "Captured", "Settled", "Failed", "Refunded"]
+      },
+      "PaymentEventDto": {
+        "type": "object",
+        "required": ["id", "toStatus", "actor", "reason", "payload", "at"],
+        "properties": {
+          "id": { "type": "string" },
+          "fromStatus": { "type": "string", "nullable": true },
+          "toStatus": { "type": "string" },
+          "actor": { "type": "string" },
+          "reason": { "type": "string" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "PaymentResponse": {
+        "type": "object",
+        "required": ["id", "amountMinor", "currency", "status", "metadata", "createdAt", "updatedAt", "events"],
+        "properties": {
+          "id": { "type": "string" },
+          "amountMinor": { "type": "integer", "format": "int64" },
+          "currency": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/PaymentStatus" },
+          "customerReference": { "type": "string", "nullable": true },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "events": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PaymentEventDto" }
+          }
+        }
+      },
+      "PaymentListResponse": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PaymentResponse" }
+          },
+          "nextCursor": { "type": "string", "nullable": true }
+        }
+      },
+      "CreatePaymentRequest": {
+        "type": "object",
+        "required": ["amountMinor", "currency", "cardToken"],
+        "properties": {
+          "amountMinor": { "type": "integer", "format": "int64" },
+          "currency": { "type": "string" },
+          "cardToken": { "type": "string" },
+          "customerReference": { "type": "string", "nullable": true },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "nullable": true
+          }
+        }
+      },
+      "CapturePaymentRequest": {
+        "type": "object",
+        "properties": {
+          "amountMinor": { "type": "integer", "format": "int64", "nullable": true }
+        }
+      },
+      "RefundPaymentRequest": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": { "type": "string" }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "details": { "nullable": true },
+          "traceId": { "type": "string", "nullable": true },
+          "requestId": { "type": "string", "nullable": true }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": { "$ref": "#/components/schemas/ErrorBody" }
+        }
+      }
+    }
+  }
+}

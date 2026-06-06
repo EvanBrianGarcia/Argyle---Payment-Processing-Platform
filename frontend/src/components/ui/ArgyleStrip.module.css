@@ -1,0 +1,8 @@
+.strip {
+  height: 4px;
+  width: 100%;
+  background-color: var(--color-brand-pattern-indigo);
+  background-image: var(--argyle-pattern);
+  background-size: 8px 8px;
+  background-repeat: repeat;
+}
