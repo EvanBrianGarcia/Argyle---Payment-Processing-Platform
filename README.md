@@ -1,11 +1,13 @@
 # Argyle — Payment Processing Platform
 
 A simplified payment processing platform built for the Argyle senior engineer
-take-home. This repository contains **Phases 1 and 2**: the vertical slice
-that proves the spine works end-to-end (Phase 1) and the full payment state
-machine with capture, refund, list, and per-transition audit events (Phase
-2). The async settlement worker, the React dashboard, and the full
-OpenTelemetry wiring land in later phases (see [What's next](#whats-next)).
+take-home. This repository contains **Phases 1, 2, and 3**: the vertical
+slice that proves the spine works end-to-end (Phase 1), the full payment
+state machine with capture, refund, list, and per-transition audit events
+(Phase 2), and the async settlement worker — transactional outbox,
+RabbitMQ-backed publish, idempotent consumer, retry policy + DLQ, RabbitMQ
+readiness probe (Phase 3). The React dashboard and the full OpenTelemetry
+wiring land in later phases (see [What's next](#whats-next)).
 
 The exercise brief lives at [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 The implementation plan lives under [`.claude/plans/`](.claude/plans).
@@ -34,11 +36,17 @@ The implementation plan lives under [`.claude/plans/`](.claude/plans).
 | `payment_events` audit table populated on every transition       |   2   |
 | Optimistic concurrency via `payments.version`                    |   2   |
 | Lifecycle event timeline returned by `GET /v1/payments/{id}`     |   2   |
-| Async settlement worker (RabbitMQ + outbox)                      |   3   |
+| Transactional outbox (`payment_outbox`) written in same tx as capture |   3   |
+| `OutboxDispatcher` BackgroundService publishes via MassTransit + RabbitMQ |   3   |
+| `PaymentPlatform.Worker` host with idempotent `SettlePaymentConsumer` |   3   |
+| `SELECT … FOR UPDATE` row lock serializes concurrent settlement deliveries | 3 |
+| Exponential retry policy with `Ignore<PermanentSettlementFailureException>` |   3   |
+| `settlement_error` DLQ catches permanent failures, payment stays Captured | 3 |
+| `GET /health/ready` — Postgres + RabbitMQ readiness probes       |   3   |
 | OpenTelemetry traces + Prometheus metrics                        |   4   |
 | React dashboard                                                  |   5   |
 
-Phases 1 and 2 prioritize operational depth on a small surface, not breadth.
+Phases 1, 2, and 3 prioritize operational depth on a small surface, not breadth.
 
 ---
 
@@ -56,13 +64,17 @@ Phases 1 and 2 prioritize operational depth on a small surface, not breadth.
 git clone <this repo>
 cd "Argyle - Payment Processing Platform"
 docker compose up -d
-docker compose logs -f api          # first boot runs EF Core Migrate and seeds merchants
+docker compose ps                    # postgres + rabbitmq + api + worker — all four healthy
+docker compose logs -f api worker    # first boot runs EF Core Migrate and seeds merchants
 ```
 
 The API listens on `http://localhost:5000` (mapped from the container's
-`:8080`). Postgres listens on `localhost:5432`. The container runs migrations
-in `Development` mode at startup, so the first boot creates the schema and
-inserts the two seed merchants.
+`:8080`). Postgres listens on `localhost:5432`. RabbitMQ's AMQP port is
+`5672` and the management UI is on `http://localhost:15672` (login
+`guest` / `guest`). The API container runs migrations in `Development`
+mode at startup, so the first boot creates the schema and inserts the two
+seed merchants. The worker container connects to RabbitMQ on the internal
+Docker network and waits for capture-driven settlement messages.
 
 To shut down and wipe state:
 
@@ -134,9 +146,12 @@ shape — now extended with `events[]` (the per-transition audit timeline) and
 `updated_at`. A live capture of these steps lives at
 [`docs/acceptance/phase-2-walkthrough.md`](docs/acceptance/phase-2-walkthrough.md).
 
-The Phase 2 acceptance walk assumes a payment is already in `Authorized`
-(Phase 3's worker performs that transition; for now we drive it via psql,
-matching the shape the worker will use):
+The Phase 2 acceptance walk assumes a payment is already in `Authorized`.
+The authorization processor lands later (Phase 4 — real card-network auth),
+so for now we drive `Pending → Authorized` via psql. This mirrors the shape
+the future authorization worker will use; Phase 3's worker handles the
+*settlement* side of the same outbox pattern (see
+[Phase 3 walkthrough](#phase-3-walkthrough) below).
 
 ```bash
 # Seed a Pending payment
@@ -186,6 +201,145 @@ the cached `PaymentResponse` without re-running the transition. A different
 body with the same key returns `409 idempotency_key_conflict`. A different
 key against a payment already past the legal transition returns `409
 invalid_state_transition`.
+
+---
+
+## Phase 3 walkthrough
+
+Phase 3 closes the `Captured → Settled` loop with an async worker. The
+capture handler writes a `payment_outbox` row in the same transaction as
+the `payments` update, an `OutboxDispatcher` BackgroundService publishes
+it via MassTransit, and `PaymentPlatform.Worker` consumes it under a
+`SELECT … FOR UPDATE` row lock.
+
+```
+   POST /v1/payments/{id}/capture
+                │
+                ▼
+       CapturePaymentHandler  ─── one transaction ───┐
+                │                                    │
+                ▼                                    ▼
+        payments (status=Captured)        payment_outbox (dispatched_at IS NULL)
+                                                     │
+                          OutboxDispatcher polls ────┘
+                                                     │
+                                                     ▼
+                                       RabbitMQ "settlement" exchange
+                                                     │
+                                                     ▼
+                                       PaymentPlatform.Worker
+                                                     │
+                                                     ▼
+                                       SettlePaymentConsumer
+                                       (FOR UPDATE row lock,
+                                        idempotent re-delivery,
+                                        retry policy + DLQ)
+                                                     │
+                                                     ▼
+                                       payments (status=Settled)
+                                       payment_events (actor=worker)
+```
+
+### Happy path — capture lands in `Settled` within seconds
+
+```bash
+# Seed a Pending payment and drive it to Authorized as in the Phase 2 walk
+RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
+PID=$(echo "$RESP" | jq -r .id)
+
+docker compose exec postgres psql -U postgres payments -c \
+  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';
+   INSERT INTO payment_events (id, payment_id, from_status, to_status, actor, reason, payload, at)
+   VALUES ('evt_' || lower(replace(gen_random_uuid()::text, '-', '')),
+           '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
+
+# Capture — the API commits the outbox row in the same transaction
+curl -s -X POST http://localhost:5000/v1/payments/$PID/capture \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" -d '{}' | jq .status
+# → "Captured"
+
+# Peek the outbox row — should appear immediately, dispatched_at NULL
+docker compose exec postgres psql -U postgres payments -c \
+  "SELECT id, aggregate_id, message_type, dispatched_at FROM payment_outbox WHERE aggregate_id='$PID';"
+
+# Wait ~3s for the dispatcher to publish and the worker to settle
+sleep 3
+curl -s http://localhost:5000/v1/payments/$PID \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  | jq '{status, events: [.events[] | {from_status, to_status, actor, reason}]}'
+# → status: "Settled"
+#   events ends with { from_status: "Captured", to_status: "Settled", actor: "worker", reason: "settled" }
+
+docker compose exec postgres psql -U postgres payments -c \
+  "SELECT dispatched_at FROM payment_outbox WHERE aggregate_id='$PID';"
+# → dispatched_at IS NOT NULL
+```
+
+### Readiness probe — `/health/ready`
+
+```bash
+curl -s http://localhost:5000/health/ready | jq .
+# → { status: "healthy", checks: [{ name: "postgres", healthy: true },
+#                                 { name: "rabbitmq",  healthy: true }] }
+
+docker compose stop rabbitmq
+curl -i http://localhost:5000/health/ready          # → 503, rabbitmq healthy: false
+docker compose start rabbitmq && sleep 5
+curl -i http://localhost:5000/health/ready          # → 200 again
+```
+
+`/health/live` (Phase 1) is unchanged — it only proves the API process is up.
+
+### Failure modes — retry and DLQ
+
+The worker ships a stub processor with three modes selected via the
+`Worker__StubProcessor__Mode` env var on the `worker` container:
+
+| Mode                     | Behavior                                                            |
+| ------------------------ | ------------------------------------------------------------------- |
+| `AlwaysSucceed`          | Default. Settles every captured payment.                            |
+| `FailNTimesThenSucceed`  | First `Worker__StubProcessor__FailureCount` calls per payment return `TransientFailure`. The retry policy redelivers. |
+| `AlwaysFailPermanent`    | Returns `PermanentFailure`. The retry policy's `Ignore<>` filter sends the message straight to `settlement_error`. |
+
+To exercise the retry path:
+
+```bash
+# Override the mode and recreate the worker container
+docker compose stop worker
+Worker__StubProcessor__Mode=FailNTimesThenSucceed \
+  docker compose up -d worker
+docker compose logs -f worker            # watch the two transient-failure log lines
+# Capture another payment — the worker logs two retries, then commits Settled
+```
+
+To exercise the DLQ path:
+
+```bash
+docker compose stop worker
+Worker__StubProcessor__Mode=AlwaysFailPermanent \
+  docker compose up -d worker
+# Capture another payment
+
+# The message lands in `settlement_error` — RabbitMQ's auto-created
+# dead-letter queue for the settlement endpoint. The payment stays Captured.
+docker compose exec rabbitmq rabbitmqctl list_queues name messages
+#  NAME                MESSAGES
+#  settlement          0
+#  settlement_error    1
+
+curl -s http://localhost:5000/v1/payments/$NEW_PID \
+  -H "Authorization: Bearer dev-key-mrc-acme" | jq .status
+# → "Captured" — no Settled event row, the payment_outbox row is still dispatched
+```
+
+Reset with `docker compose stop worker && docker compose up -d worker`
+(the default env brings `AlwaysSucceed` back).
 
 ---
 
@@ -285,21 +439,24 @@ EF Core (PaymentsDbContext) ← single Postgres connection, snake_case mapping
 ```
 backend/
 ├── src/
-│   ├── PaymentPlatform.Api               # Hosting, middleware, endpoints, DI composition
-│   ├── PaymentPlatform.Application       # MediatR features, validators, abstractions, common exceptions
-│   ├── PaymentPlatform.Domain            # Payment + Merchant aggregates, value objects
-│   ├── PaymentPlatform.Infrastructure    # EF Core DbContext + configurations + migration, idempotency store, SystemClock
+│   ├── PaymentPlatform.Api               # Hosting, middleware, endpoints, DI composition, RabbitMqHealthProbe
+│   ├── PaymentPlatform.Application       # MediatR features, validators, abstractions, common exceptions, IPaymentProcessor
+│   ├── PaymentPlatform.Domain            # Payment + Merchant aggregates, value objects, PaymentOutboxMessage
+│   ├── PaymentPlatform.Infrastructure    # EF Core DbContext + configurations + migrations, idempotency store, SystemClock, MassTransit publisher, StubPaymentProcessor, OutboxDispatcher hosted service
+│   ├── PaymentPlatform.Messaging         # SettlePayment message contract + queue / exchange names shared by API and Worker
+│   ├── PaymentPlatform.Worker            # IHost with MassTransit consumer, SettlePaymentConsumer, retry policy + DLQ topology
 │   └── PaymentPlatform.Contracts         # Public DTOs (request / response shapes, error envelope)
 └── tests/
-    ├── PaymentPlatform.UnitTests         # 124 tests — domain, state machine, validators, handlers
-    └── PaymentPlatform.IntegrationTests  # 56 tests — Testcontainers Postgres + WebApplicationFactory
+    ├── PaymentPlatform.UnitTests         # 139 tests — domain, state machine, validators, handlers, processor
+    └── PaymentPlatform.IntegrationTests  # 77 tests — Testcontainers Postgres + RabbitMQ + WebApplicationFactory + in-process Worker host
 ```
 
 Reference direction (no cycles):
 `Api → Application + Infrastructure + Contracts`,
+`Worker → Application + Infrastructure + Messaging`,
 `Application → Domain + Contracts`,
-`Infrastructure → Application + Domain`,
-`Contracts` and `Domain` reference nothing.
+`Infrastructure → Application + Domain + Messaging`,
+`Messaging`, `Contracts`, and `Domain` reference nothing.
 
 ### Data model (Phase 1 subset)
 
@@ -307,6 +464,7 @@ Reference direction (no cycles):
 - `payments(id, merchant_id, status, amount_minor, currency, customer_reference, card_token, metadata, created_at, updated_at, version)` — `status` walks the state machine (see [State machine](#payment-state-machine)); `version` backs optimistic concurrency on capture / refund.
 - `payment_events(id, payment_id, from_status, to_status, actor, reason, payload, at)` — append-only audit log, populated on every transition (including the initial `null → Pending` event on create). `payload` is JSONB.
 - `idempotency_keys(merchant_id, operation, key, request_hash, response_json, created_at)` — composite PK `(merchant_id, operation, key)`. Replay returns the cached `response_json`. The `operation` column is what makes per-operation key reuse safe.
+- `payment_outbox(id, aggregate_id, message_type, payload, created_at, dispatched_at)` — Phase 3 transactional outbox. The capture handler writes a row in the same `SaveChangesAsync` as the `payments` update; `OutboxDispatcher` polls (default 2s) for rows where `dispatched_at IS NULL`, publishes via MassTransit, and flips `dispatched_at`. A partial index on `(created_at) WHERE dispatched_at IS NULL` keeps the poll cheap.
 
 The `(merchant_id, created_at DESC, id DESC)` index on `payments` powers
 the Phase 2 list endpoint's cursor pagination.
@@ -372,16 +530,26 @@ they're dev affordances for the take-home.
 
 ```bash
 cd backend
-dotnet test                    # 180 tests: 124 unit + 56 integration
+dotnet test                    # 216 tests + 1 skip: 139 unit + 77 integration + 1 superseded wiring smoke
 dotnet test --filter "FullyQualifiedName~UnitTests"          # unit only — no Docker required
 dotnet test --filter "FullyQualifiedName~IntegrationTests"   # needs Docker running
 ```
 
-Integration tests use Testcontainers to spin up a fresh `postgres:16-alpine`
-container per test run, then `WebApplicationFactory<Program>` to host the
-real API in-process against it. The fixture sets
-`POSTGRES_HOST_AUTH_METHOD=trust` so the container accepts host-bound
-connections without password handshake.
+Unit tests cover the domain aggregate, state machine, validators, handlers,
+and the stub processor. Integration tests use Testcontainers to spin up
+fresh `postgres:16-alpine` and `rabbitmq:3-management-alpine` containers
+per test run, then `WebApplicationFactory<Program>` to host the real API
+in-process against them. Phase 3 retry / DLQ / capstone tests share a
+single broker container via `[Collection(MessagingTestCollection.Name)]`
+because back-to-back fresh RabbitMQ fixtures struggle under Docker
+container churn. The fixture sets `POSTGRES_HOST_AUTH_METHOD=trust` so
+the Postgres container accepts host-bound connections without password
+handshake.
+
+The one skipped test (`SettlementEndToEndTests.PublishingSettlePayment_ReachesWorkerConsumer_WithinFiveSeconds`)
+is the Phase 3 Task 3 wiring smoke — superseded by Phase 3 Task 9's
+`HappyPathFullLifecycleTests`, which exercises the same publish-via-API →
+consume-via-Worker path end-to-end against real state machine semantics.
 
 ---
 
@@ -460,14 +628,20 @@ is the most important.
 
 Phases planned in [`.claude/plans/payment-platform.plan.md` §13](.claude/plans/payment-platform.plan.md):
 
-- **Phase 3** — Async settlement worker via RabbitMQ, transactional outbox,
-  configurable failure modes on the stub processor, DLQ. Replaces the Phase 2
-  walkthrough's psql-driven `Pending → Authorized` step with a real worker.
-- **Phase 4** — OpenTelemetry across API + worker, `/metrics`, `/health/ready`,
-  log redaction enricher, ADRs.
+- **Phase 4** — OpenTelemetry across API + worker (OTLP exporter + activity
+  propagation through the outbox + message envelope), `/metrics`, log
+  redaction enricher, real authorization processor that replaces the
+  psql-driven `Pending → Authorized` stand-in.
 - **Phase 5** — React + Vite dashboard with list view, status filter, cursor
   pagination, detail view with event timeline.
 - **Phase 6** — Polish, scripted demo, finalized docs.
+
+Phase 3 (the async settlement worker) is shipped — see
+[Phase 3 walkthrough](#phase-3-walkthrough) for the live acceptance
+script and [`docs/adr/0008-async-settlement-architecture.md`](docs/adr/) for
+the design rationale (outbox-write-then-publish ordering, FOR UPDATE row
+lock for concurrent-delivery serialization, `Ignore<>` + DLQ for permanent
+failures).
 
 ---
 

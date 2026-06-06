@@ -17,6 +17,24 @@ services:
       retries: 10
       start_period: 5s
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: payments-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "${RABBITMQ_HOST_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_HOST_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   api:
     build:
       context: ./backend
@@ -26,11 +44,40 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Payments: "Host=postgres;Port=5432;Database=payments;Username=postgres;Password=postgres"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     ports:
       - "${API_HOST_PORT:-5000}:8080"
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: src/PaymentPlatform.Worker/Dockerfile
+    container_name: payments-worker
+    environment:
+      DOTNET_ENVIRONMENT: Development
+      ConnectionStrings__Payments: "Host=postgres;Port=5432;Database=payments;Username=postgres;Password=postgres"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: "5672"
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      # Override `Worker__StubProcessor__Mode` to FailNTimesThenSucceed or
+      # AlwaysFailPermanent to exercise the retry / DLQ paths from a live
+      # capture — see the README's Phase 3 failure-mode block.
+      Worker__StubProcessor__Mode: AlwaysSucceed
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   postgres-data:
+  rabbitmq-data:
