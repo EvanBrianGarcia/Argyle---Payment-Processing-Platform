@@ -91,16 +91,23 @@ public sealed class ExceptionHandlingMiddleware
             return;
         }
 
+        var requestId = context.Items[CorrelationIdMiddleware.RequestIdItemKey] as string;
+
         var envelope = new ErrorEnvelope(new ErrorBody(
             Code: code,
             Message: message,
             Details: details,
             TraceId: Activity.Current?.TraceId.ToString(),
-            RequestId: context.Items[CorrelationIdMiddleware.RequestIdItemKey] as string));
+            RequestId: requestId));
 
         context.Response.Clear();
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/json; charset=utf-8";
+
+        if (!string.IsNullOrEmpty(requestId))
+        {
+            context.Response.Headers[CorrelationIdMiddleware.RequestIdHeader] = requestId;
+        }
 
         await context.Response.WriteAsync(
             JsonSerializer.Serialize(envelope, JsonOptions.Default),

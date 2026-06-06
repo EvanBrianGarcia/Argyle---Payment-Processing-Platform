@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Api;
+using PaymentPlatform.Api.Diagnostics;
 using PaymentPlatform.Api.Endpoints;
 using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Infrastructure;
@@ -9,6 +10,7 @@ using Serilog.Formatting.Compact;
 
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
+    .Enrich.With<TraceIdEnricher>()
     .WriteTo.Console(new CompactJsonFormatter())
     .CreateBootstrapLogger();
 
@@ -19,6 +21,7 @@ try
     builder.Host.UseSerilog((ctx, _, cfg) => cfg
         .ReadFrom.Configuration(ctx.Configuration)
         .Enrich.FromLogContext()
+        .Enrich.With<TraceIdEnricher>()
         .WriteTo.Console(new CompactJsonFormatter()));
 
     builder.Services.AddApiServices();
@@ -33,9 +36,9 @@ try
         db.Database.Migrate();
     }
 
-    app.UseSerilogRequestLogging();
     app.UseMiddleware<ExceptionHandlingMiddleware>();
     app.UseMiddleware<CorrelationIdMiddleware>();
+    app.UseSerilogRequestLogging();
     app.UseMiddleware<DevBearerAuthMiddleware>();
 
     app.MapHealthEndpoints();

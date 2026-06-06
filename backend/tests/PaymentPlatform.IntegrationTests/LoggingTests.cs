@@ -61,6 +61,44 @@ public sealed class LoggingTests : IntegrationTestBase
     }
 
     [Fact]
+    public async Task LogLines_RequestCompletionEntry_CarriesRequestId()
+    {
+        await PostPaymentAsync("tok_visa_demo");
+
+        var lines = Factory.LogSink.Lines;
+
+        var requestCompletionLines = lines
+            .Select(line => JsonDocument.Parse(line))
+            .Where(doc =>
+                doc.RootElement.TryGetProperty("@mt", out var mt) &&
+                (mt.GetString() ?? string.Empty).Contains("HTTP "))
+            .ToList();
+
+        requestCompletionLines.Should().NotBeEmpty(
+            "Serilog.AspNetCore emits an 'HTTP {Method} {Path} responded {Status}' line per request");
+        requestCompletionLines.Should().AllSatisfy(doc =>
+            doc.RootElement.TryGetProperty("request_id", out _).Should().BeTrue(
+                "the request-completed line must inherit the correlation request_id"));
+    }
+
+    [Fact]
+    public async Task LogLines_IncludeTraceId()
+    {
+        await PostPaymentAsync("tok_visa_demo");
+
+        var lines = Factory.LogSink.Lines;
+        lines.Should().NotBeEmpty();
+
+        var entriesWithTraceId = lines
+            .Select(line => JsonDocument.Parse(line))
+            .Count(doc => doc.RootElement.TryGetProperty("trace_id", out _));
+
+        entriesWithTraceId.Should().BeGreaterThan(
+            0,
+            "request-scoped log entries must carry the OpenTelemetry trace_id");
+    }
+
+    [Fact]
     public async Task LogLines_NeverContainCardTokenValue()
     {
         const string secret = "tok_secret_xyz_12345";

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
+using PaymentPlatform.Api.Diagnostics;
 using Serilog;
 
 namespace PaymentPlatform.IntegrationTests.Fixtures;
@@ -36,6 +37,7 @@ public sealed class PaymentApiFactory : WebApplicationFactory<Program>
         builder.UseSerilog((ctx, _, cfg) => cfg
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.FromLogContext()
+            .Enrich.With<TraceIdEnricher>()
             .WriteTo.Sink(LogSink));
 
         return base.CreateHost(builder);
