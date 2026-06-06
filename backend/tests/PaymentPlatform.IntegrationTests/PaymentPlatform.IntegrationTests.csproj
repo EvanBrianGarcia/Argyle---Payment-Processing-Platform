@@ -31,6 +31,7 @@
     <ProjectReference Include="..\..\src\PaymentPlatform.Infrastructure\PaymentPlatform.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\PaymentPlatform.Contracts\PaymentPlatform.Contracts.csproj" />
     <ProjectReference Include="..\..\src\PaymentPlatform.Messaging\PaymentPlatform.Messaging.csproj" />
+    <ProjectReference Include="..\..\src\PaymentPlatform.Worker\PaymentPlatform.Worker.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,6 +1,7 @@
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Infrastructure.Clock;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Infrastructure.Processing;
 using PaymentPlatform.Messaging.Settlement;
@@ -27,6 +28,8 @@ try
     builder.Services.AddDbContext<PaymentsDbContext>(options =>
         options.UseNpgsql(connectionString));
     builder.Services.AddScoped<IPaymentsDbContext>(sp => sp.GetRequiredService<PaymentsDbContext>());
+
+    builder.Services.AddSingleton<IClock, SystemClock>();
 
     builder.Services.Configure<StubProcessorOptions>(
         builder.Configuration.GetSection(StubProcessorOptions.SectionName));
@@ -72,4 +75,7 @@ finally
     Log.CloseAndFlush();
 }
 
-public partial class Program { }
+namespace PaymentPlatform.Worker
+{
+    public partial class Program { }
+}
