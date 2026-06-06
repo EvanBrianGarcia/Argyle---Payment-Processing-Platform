@@ -9,6 +9,7 @@ public sealed class PaymentOutboxMessage
     public string MessageType { get; private set; } = default!;
     public string Payload { get; private set; } = default!;
     public string CorrelationId { get; private set; } = default!;
+    public string? Traceparent { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? DispatchedAt { get; private set; }
 
@@ -21,12 +22,14 @@ public sealed class PaymentOutboxMessage
         string messageType,
         string payload,
         string correlationId,
+        string? traceparent,
         DateTimeOffset createdAt)
     {
         AggregateId = aggregateId;
         MessageType = messageType;
         Payload = payload;
         CorrelationId = correlationId;
+        Traceparent = traceparent;
         CreatedAt = createdAt;
         DispatchedAt = null;
     }
@@ -36,7 +39,8 @@ public sealed class PaymentOutboxMessage
         string messageType,
         string payload,
         string correlationId,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        string? traceparent = null)
     {
         if (string.IsNullOrWhiteSpace(aggregateId))
         {
@@ -63,6 +67,7 @@ public sealed class PaymentOutboxMessage
             messageType: messageType,
             payload: payload,
             correlationId: correlationId,
+            traceparent: string.IsNullOrWhiteSpace(traceparent) ? null : traceparent,
             createdAt: createdAt);
     }
 }

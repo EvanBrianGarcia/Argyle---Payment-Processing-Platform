@@ -63,7 +63,11 @@ public sealed class SettlePaymentConsumer : IConsumer<SettlePayment>
         activity?.SetTag("payment_id", message.PaymentId);
         activity?.SetTag("merchant_id", message.MerchantId);
         using var paymentScope = SerilogLogContext.PushProperty("payment_id", message.PaymentId);
-        using var traceScope = SerilogLogContext.PushProperty("trace_id", message.CorrelationId);
+        // The OTel-managed Activity is the source of truth for trace_id/span_id
+        // (TraceIdEnricher reads it). The message's CorrelationId is the
+        // application-layer publish-time ULID — useful for joining outbox rows
+        // to consumer logs but distinct from the W3C trace id.
+        using var correlationScope = SerilogLogContext.PushProperty("correlation_id", message.CorrelationId);
 
         await using var tx = await _db.Database.BeginTransactionAsync(context.CancellationToken);
 

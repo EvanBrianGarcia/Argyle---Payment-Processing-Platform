@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Api;
 using PaymentPlatform.Api.Configuration;
-using PaymentPlatform.Api.Diagnostics;
 using PaymentPlatform.Api.Endpoints;
 using PaymentPlatform.Api.HealthChecks;
 using PaymentPlatform.Api.HostedServices;
@@ -53,6 +52,7 @@ try
 
     app.UseMiddleware<ExceptionHandlingMiddleware>();
     app.UseMiddleware<CorrelationIdMiddleware>();
+    app.UseMiddleware<TraceparentResponseHeaderMiddleware>();
     app.UseSerilogRequestLogging();
     app.UseRouting();
     app.UseHttpMetrics();

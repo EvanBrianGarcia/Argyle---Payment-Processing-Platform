@@ -28,6 +28,7 @@ try
 
     builder.Host.UseSerilog((_, _, cfg) => cfg
         .Enrich.FromLogContext()
+        .Enrich.With<TraceIdEnricher>()
         .WriteTo.Console(new CompactJsonFormatter()));
 
     // Restrict Kestrel to the metrics port only — the worker is not a public

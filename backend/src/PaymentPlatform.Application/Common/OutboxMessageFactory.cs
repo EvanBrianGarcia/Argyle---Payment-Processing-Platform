@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using NUlid;
 using PaymentPlatform.Domain.Outbox;
@@ -37,12 +38,18 @@ public static class OutboxMessageFactory
 
         var payload = JsonSerializer.Serialize(message, PayloadJsonOptions);
 
+        // Capture the active W3C trace context so OutboxDispatcher can restore
+        // it before publish. Without this, the dispatcher's background loop
+        // publishes under its own root trace, severing the API → Worker chain.
+        var traceparent = Activity.Current?.Id;
+
         return PaymentOutboxMessage.Create(
             aggregateId: payment.Id,
             messageType: OutboxMessageType.Settlement,
             payload: payload,
             correlationId: correlationId,
-            createdAt: now);
+            createdAt: now,
+            traceparent: traceparent);
     }
 
     public static SettlePayment DeserializeSettlement(PaymentOutboxMessage outboxMessage)

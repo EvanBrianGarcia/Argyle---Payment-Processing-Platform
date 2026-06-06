@@ -15,6 +15,7 @@ using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Messaging.Settlement;
 using PaymentPlatform.Worker.Consumers;
 using Prometheus;
+using Serilog;
 
 namespace PaymentPlatform.IntegrationTests.Fixtures;
 
@@ -41,6 +42,7 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
     public MutableTestClock Clock { get; }
     public SettlementFaultSink Faults { get; }
     public int MetricsPort { get; }
+    public InMemoryLogSink LogSink { get; }
 
     private SettlementWorkerHost(
         IHost host,
@@ -48,7 +50,8 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
         ControllableProcessor processor,
         MutableTestClock clock,
         SettlementFaultSink faults,
-        int metricsPort)
+        int metricsPort,
+        InMemoryLogSink logSink)
     {
         _host = host;
         _metricsApp = metricsApp;
@@ -56,6 +59,7 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
         Clock = clock;
         Faults = faults;
         MetricsPort = metricsPort;
+        LogSink = logSink;
     }
 
     public IServiceProvider Services => _host.Services;
@@ -67,8 +71,20 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
         var processor = new ControllableProcessor();
         var clock = new MutableTestClock();
         var faults = new SettlementFaultSink();
+        var logSink = new InMemoryLogSink();
 
         var builder = Host.CreateApplicationBuilder();
+
+        // Replace the default ILogger with Serilog so TraceIdEnricher can
+        // surface trace_id/span_id on the worker's consumer log lines —
+        // mirrors the production Worker's Serilog pipeline.
+        var serilogLogger = new LoggerConfiguration()
+            .Enrich.FromLogContext()
+            .Enrich.With<TraceIdEnricher>()
+            .WriteTo.Sink(logSink)
+            .CreateLogger();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddSerilog(serilogLogger, dispose: true);
 
         builder.Services.AddSingleton<IPaymentProcessor>(processor);
         builder.Services.AddSingleton(processor);
@@ -122,7 +138,7 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
         var metricsApp = await StartMetricsListenerAsync();
         var metricsPort = ResolveBoundPort(metricsApp);
 
-        return new SettlementWorkerHost(host, metricsApp, processor, clock, faults, metricsPort);
+        return new SettlementWorkerHost(host, metricsApp, processor, clock, faults, metricsPort, logSink);
     }
 
     public async ValueTask DisposeAsync()

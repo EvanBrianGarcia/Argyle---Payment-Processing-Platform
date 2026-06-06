@@ -2,7 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
-using PaymentPlatform.Api.Diagnostics;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using Serilog;
 
 namespace PaymentPlatform.IntegrationTests.Fixtures;

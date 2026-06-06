@@ -134,7 +134,12 @@ public sealed class TracePropagationTests : IClassFixture<InMemoryTelemetryFixtu
         consumerSpan!.ParentSpanId.ToString().Should().NotMatch("0000000000000000",
             "the consume span must have a parent — that is the cross-process traceparent linkage");
 
-        var consumerTraceSpans = freshSpans
+        // Drain a bit longer — with Task 5 the consume trace now includes
+        // the API publisher's spans, and the publish span sometimes arrives
+        // a few ms after the consume span on a busy suite run.
+        await WaitForSpanWithIdAsync(consumerSpan.ParentSpanId, consumerSpan.TraceId, TimeSpan.FromSeconds(5));
+
+        var consumerTraceSpans = _telemetry.Captured.Skip(beforeCapture)
             .Where(a => a.TraceId == consumerSpan.TraceId)
             .ToArray();
         var parentOfConsumer = consumerTraceSpans
@@ -160,6 +165,19 @@ public sealed class TracePropagationTests : IClassFixture<InMemoryTelemetryFixtu
                 return;
             }
             await Task.Delay(100);
+        }
+    }
+
+    private async Task WaitForSpanWithIdAsync(ActivitySpanId spanId, ActivityTraceId traceId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (_telemetry.Captured.Any(a => a.SpanId == spanId && a.TraceId == traceId))
+            {
+                return;
+            }
+            await Task.Delay(50);
         }
     }
 
@@ -196,6 +214,174 @@ public sealed class TracePropagationTests : IClassFixture<InMemoryTelemetryFixtu
         newSpans.Should().NotContain(
             a => a.Kind == ActivityKind.Server && IsMetricsPath(a),
             "/metrics must be excluded from the AspNetCore instrumentation Filter");
+    }
+
+    [Fact]
+    public async Task PostPayments_Response_Includes_TraceparentHeader_InW3CFormat()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments")
+        {
+            Content = TestJson.Content(new
+            {
+                AmountMinor = 12500L,
+                Currency = "USD",
+                CardToken = "tok_visa_demo",
+            }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AcmeKey);
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+
+        var response = await _client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        response.Headers.TryGetValues("traceparent", out var traceparentValues).Should().BeTrue(
+            "Task 5's TraceparentResponseHeaderMiddleware must emit a traceparent response header");
+        var traceparent = traceparentValues!.Single();
+        // W3C format: version-traceid-spanid-flags → 00-<32 hex>-<16 hex>-<2 hex>
+        traceparent.Should().MatchRegex("^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+            $"traceparent must be a valid W3C string; got '{traceparent}'");
+    }
+
+    [Fact]
+    public async Task IncomingTraceparent_BecomesParentOfServerSpan()
+    {
+        var incomingTraceId = "abcdef0123456789abcdef0123456789";
+        var incomingSpanId = "0123456789abcdef";
+        var incomingTraceparent = $"00-{incomingTraceId}-{incomingSpanId}-01";
+
+        var beforeCount = _telemetry.Captured.Count;
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/payments")
+        {
+            Content = TestJson.Content(new
+            {
+                AmountMinor = 12500L,
+                Currency = "USD",
+                CardToken = "tok_visa_demo",
+            }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", AcmeKey);
+        request.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+        request.Headers.Add("traceparent", incomingTraceparent);
+
+        var response = await _client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        // Drain spans, then find the server span emitted for this request.
+        await WaitForServerSpanWithTraceIdAsync(beforeCount, incomingTraceId, TimeSpan.FromSeconds(5));
+
+        var serverSpan = _telemetry.Captured
+            .Skip(beforeCount)
+            .FirstOrDefault(a => a.Kind == ActivityKind.Server
+                && string.Equals(a.TraceId.ToString(), incomingTraceId, StringComparison.OrdinalIgnoreCase));
+
+        serverSpan.Should().NotBeNull(
+            "the ASP.NET Core OTel instrumentation must adopt the incoming W3C traceparent as the server span's trace id");
+        serverSpan!.ParentSpanId.ToString().Should().Be(incomingSpanId,
+            "the server span's parent must be the span id we sent in the traceparent header");
+    }
+
+    [Fact]
+    public async Task ApiRequestLog_Includes_TraceId_And_SpanId()
+    {
+        _apiFactory.LogSink.Clear();
+        var beforeCount = _telemetry.Captured.Count;
+
+        await CreatePaymentAsync();
+
+        var traceId = await AwaitTraceIdForNewServerSpanAsync(beforeCount, "POST /v1/payments");
+
+        // Find any log line tagged with this request's trace_id. The
+        // CompactJsonFormatter writes properties as top-level JSON keys, so
+        // a literal "trace_id":"<hex>" substring match is unambiguous.
+        await Eventually(() =>
+        {
+            var matching = _apiFactory.LogSink.Lines
+                .Where(line => line.Contains($"\"trace_id\":\"{traceId}\""))
+                .ToArray();
+            matching.Should().NotBeEmpty(
+                "at least one API log line must carry the W3C trace_id property emitted by TraceIdEnricher");
+
+            matching.Should().Contain(
+                line => System.Text.RegularExpressions.Regex.IsMatch(line, "\"span_id\":\"[0-9a-f]{16}\""),
+                "the same log lines must also include a 16-hex span_id property — Task 5 requires both, not just trace_id");
+
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task WorkerConsumerLog_HasSameTraceId_DifferentSpanId_AsApiCapture()
+    {
+        _apiFactory.LogSink.Clear();
+        _worker.LogSink.Clear();
+
+        var paymentId = await CreatePaymentAsync();
+        await AuthorizeInProcessAsync(paymentId);
+
+        var beforeCapture = _telemetry.Captured.Count;
+        await CaptureAsync(paymentId);
+        var captureTraceId = await AwaitTraceIdForNewServerSpanAsync(
+            beforeCapture, $"POST /v1/payments/{paymentId}/capture");
+
+        // Pull the capture server span's span_id so we can assert the worker
+        // uses a DIFFERENT span_id within the same trace.
+        var captureServerSpan = _telemetry.Captured
+            .Skip(beforeCapture)
+            .First(a => a.Kind == ActivityKind.Server
+                && string.Equals(a.TraceId.ToString(), captureTraceId, StringComparison.OrdinalIgnoreCase));
+        var captureSpanId = captureServerSpan.SpanId.ToString();
+
+        await Eventually(async () =>
+        {
+            var status = await ReadStatusAsync(paymentId);
+            status.Should().Be("Settled");
+        }, TimeSpan.FromSeconds(20));
+
+        // The settled trace propagates through MassTransit's traceparent
+        // envelope, so the consumer span shares the capture's trace id but
+        // emits its own span. Settled-payment log lines emitted under that
+        // consume span must carry the same trace_id and a fresh span_id.
+        await Eventually(() =>
+        {
+            var consumerLines = _worker.LogSink.Lines
+                .Where(line => line.Contains($"\"trace_id\":\"{captureTraceId}\""))
+                .ToArray();
+            consumerLines.Should().NotBeEmpty(
+                "the worker's consumer log lines must carry the same W3C trace_id as the API capture — the cross-process propagation invariant");
+
+            var spanIdMatches = consumerLines
+                .Select(line => System.Text.RegularExpressions.Regex.Match(line, "\"span_id\":\"([0-9a-f]{16})\""))
+                .Where(m => m.Success)
+                .Select(m => m.Groups[1].Value)
+                .Distinct()
+                .ToArray();
+            spanIdMatches.Should().NotBeEmpty(
+                "the worker's log lines must also carry a 16-hex span_id property");
+            spanIdMatches.Should().NotContain(captureSpanId,
+                "the consume span's id must be distinct from the API capture's server span id — they live in the same trace but are different spans");
+            spanIdMatches.Should().NotContain("0000000000000000",
+                "Activity.Current.SpanId must be a real (non-zero) span id inside the consumer");
+
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(15));
+    }
+
+    private async Task WaitForServerSpanWithTraceIdAsync(int beforeCount, string traceId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var match = _telemetry.Captured
+                .Skip(beforeCount)
+                .FirstOrDefault(a => a.Kind == ActivityKind.Server
+                    && string.Equals(a.TraceId.ToString(), traceId, StringComparison.OrdinalIgnoreCase));
+            if (match is not null)
+            {
+                return;
+            }
+            await Task.Delay(50);
+        }
     }
 
     private static bool IsHealthPath(Activity activity)

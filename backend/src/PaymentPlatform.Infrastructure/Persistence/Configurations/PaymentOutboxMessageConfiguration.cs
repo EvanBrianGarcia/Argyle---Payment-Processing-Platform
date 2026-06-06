@@ -37,6 +37,13 @@ public sealed class PaymentOutboxMessageConfiguration : IEntityTypeConfiguration
             .HasColumnType("text")
             .IsRequired();
 
+        // Phase 4 Task 5 — persisted W3C traceparent so the OutboxDispatcher
+        // can restore the originating capture's trace context before publish
+        // and the consume span lands in the same trace.
+        builder.Property(o => o.Traceparent)
+            .HasColumnName("traceparent")
+            .HasColumnType("text");
+
         builder.Property(o => o.CreatedAt)
             .HasColumnName("created_at")
             .HasColumnType("timestamptz")

@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PaymentPlatform.Api.Configuration;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
+using PaymentPlatform.Application.Diagnostics;
 using PaymentPlatform.Infrastructure.Persistence;
 using Serilog.Context;
 
@@ -83,7 +85,27 @@ public sealed class OutboxDispatcher : BackgroundService
         foreach (var row in batch)
         {
             using var _ = LogContext.PushProperty("payment_id", row.AggregateId);
-            using var __ = LogContext.PushProperty("trace_id", row.CorrelationId);
+            // OTel Activity (via TraceIdEnricher) owns trace_id/span_id; this
+            // surfaces the publish-time ULID under its own key so dispatcher
+            // and consumer logs can be joined back to the originating row.
+            using var __ = LogContext.PushProperty("correlation_id", row.CorrelationId);
+
+            // Restore the originating capture's W3C trace context so the
+            // MassTransit publish span — and the worker's downstream consume
+            // span — land inside that trace instead of the dispatcher's own
+            // background root trace. When the row predates Task 5 (no
+            // persisted traceparent) we skip the explicit publish activity
+            // entirely; MassTransit then starts its own root publish span —
+            // matching pre-Task-5 behavior — instead of accidentally
+            // parenting to whatever ambient Activity.Current may carry.
+            var parentContext = TryParseTraceparent(row.Traceparent);
+            using var publishActivity = parentContext is ActivityContext ctx
+                ? PaymentsActivitySource.Source.StartActivity(
+                    "OutboxDispatcher.Publish",
+                    ActivityKind.Producer,
+                    ctx)
+                : null;
+            publishActivity?.SetTag("payment_id", row.AggregateId);
 
             var message = OutboxMessageFactory.DeserializeSettlement(row);
             await publisher.PublishSettlementAsync(message, cancellationToken);
@@ -102,5 +124,17 @@ public sealed class OutboxDispatcher : BackgroundService
         }
 
         return batch.Count;
+    }
+
+    private static ActivityContext? TryParseTraceparent(string? traceparent)
+    {
+        if (string.IsNullOrWhiteSpace(traceparent))
+        {
+            return null;
+        }
+        // ActivityContext.TryParse handles the W3C "00-<traceid>-<spanid>-<flags>"
+        // form. Returning null on malformed input keeps a stray row from
+        // crashing the dispatcher loop.
+        return ActivityContext.TryParse(traceparent, traceState: null, out var ctx) ? ctx : null;
     }
 }
