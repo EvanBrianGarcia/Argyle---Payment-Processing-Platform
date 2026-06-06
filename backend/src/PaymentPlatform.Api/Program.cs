@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Api;
+using PaymentPlatform.Api.Configuration;
 using PaymentPlatform.Api.Diagnostics;
 using PaymentPlatform.Api.Endpoints;
+using PaymentPlatform.Api.HostedServices;
 using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Infrastructure;
 using PaymentPlatform.Infrastructure.Messaging;
@@ -28,6 +30,11 @@ try
     builder.Services.AddApiServices();
     builder.Services.AddInfrastructure(builder.Configuration);
     builder.Services.AddPaymentMessagingPublisher(builder.Configuration);
+
+    builder.Services
+        .AddOptions<OutboxDispatcherOptions>()
+        .Bind(builder.Configuration.GetSection(OutboxDispatcherOptions.SectionName));
+    builder.Services.AddHostedService<OutboxDispatcher>();
 
     var app = builder.Build();
 
