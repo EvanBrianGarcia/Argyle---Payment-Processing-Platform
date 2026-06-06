@@ -60,9 +60,10 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
 
         _db.Payments.Add(payment);
 
-        // Task 7 will append the initial null → Pending event here; for Task 4
-        // we keep the events list empty so the response shape is consistent.
-        var response = PaymentResponseSerializer.ToResponse(payment, Array.Empty<PaymentEvent>());
+        var initialEvent = payment.CreateInitialEvent(_clock.UtcNow);
+        _db.PaymentEvents.Add(initialEvent);
+
+        var response = PaymentResponseSerializer.ToResponse(payment, new[] { initialEvent });
         return Task.FromResult(response);
     }
 

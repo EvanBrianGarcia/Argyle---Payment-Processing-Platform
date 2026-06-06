@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,6 +37,57 @@ public sealed class CreatePaymentTests : IntegrationTestBase
         json.RootElement.GetProperty("currency").GetString().Should().Be("USD");
 
         (await CountPaymentsAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HappyPath_ResponseIncludesInitialPendingEvent()
+    {
+        using var request = BuildCreateRequest(
+            bearer: AcmeKey,
+            idempotencyKey: Guid.NewGuid().ToString(),
+            payload: ValidPayload());
+
+        var response = await Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        using var json = await TestJson.ParseAsync(response);
+        var paymentId = json.RootElement.GetProperty("id").GetString();
+        paymentId.Should().StartWith("pay_");
+
+        var events = json.RootElement.GetProperty("events");
+        events.ValueKind.Should().Be(JsonValueKind.Array);
+        events.GetArrayLength().Should().Be(1, "create must emit exactly one initial event");
+
+        var initial = events[0];
+        // from_status is null on the initial event and the API serializer omits
+        // null properties globally, so the property must be absent — not present-as-null.
+        initial.TryGetProperty("from_status", out _).Should().BeFalse(
+            "the API omits null-valued properties; from_status must not be emitted on the initial event");
+        initial.GetProperty("to_status").GetString().Should().Be("Pending");
+        initial.GetProperty("reason").GetString().Should().Be("created");
+        initial.GetProperty("actor").GetString().Should().Be("api");
+
+        var rowsForPayment = await CountEventsForAsync(paymentId!);
+        rowsForPayment.Should().Be(1, "exactly one event row must be persisted on create");
+    }
+
+    [Fact]
+    public async Task HappyPath_ResponseIncludesUpdatedAt()
+    {
+        using var request = BuildCreateRequest(
+            bearer: AcmeKey,
+            idempotencyKey: Guid.NewGuid().ToString(),
+            payload: ValidPayload());
+
+        var response = await Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        using var json = await TestJson.ParseAsync(response);
+        var createdAt = json.RootElement.GetProperty("created_at").GetDateTimeOffset();
+        var updatedAt = json.RootElement.GetProperty("updated_at").GetDateTimeOffset();
+        updatedAt.Should().Be(createdAt, "on initial create updated_at must equal created_at");
     }
 
     [Fact]
@@ -174,5 +226,14 @@ public sealed class CreatePaymentTests : IntegrationTestBase
         using var scope = Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
         return await db.Payments.AsNoTracking().CountAsync();
+    }
+
+    private async Task<int> CountEventsForAsync(string paymentId)
+    {
+        using var scope = Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
+        return await db.PaymentEvents
+            .AsNoTracking()
+            .CountAsync(e => e.PaymentId == paymentId);
     }
 }
