@@ -53,6 +53,26 @@ public sealed class ExceptionHandlingMiddleware
                 ex.Message,
                 details: null);
         }
+        catch (ConcurrencyConflictException ex)
+        {
+            await WriteAsync(
+                context,
+                StatusCodes.Status409Conflict,
+                "concurrent_modification",
+                ex.Message,
+                details: null);
+        }
+        catch (InvalidTransitionException ex)
+        {
+            // Must come BEFORE the DomainException catch (it's a subtype) so
+            // illegal state transitions surface as 409 instead of 422.
+            await WriteAsync(
+                context,
+                StatusCodes.Status409Conflict,
+                ex.Code,
+                ex.Message,
+                details: null);
+        }
         catch (DomainException ex)
         {
             await WriteAsync(

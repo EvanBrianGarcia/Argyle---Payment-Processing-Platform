@@ -95,6 +95,12 @@ public sealed class PaymentConfiguration : IEntityTypeConfiguration<Payment>
             .HasDefaultValueSql("now()")
             .IsRequired();
 
+        // `version` is the optimistic concurrency token. EF Core's
+        // IsConcurrencyToken() makes it a WHERE-clause check on every
+        // UPDATE but does NOT auto-increment the value. A SaveChanges
+        // interceptor (PaymentVersionInterceptor) bumps it on every
+        // Modified Payment so that concurrent writes detect each other
+        // and the second one throws DbUpdateConcurrencyException.
         builder.Property<int>("Version")
             .HasColumnName("version")
             .HasColumnType("integer")

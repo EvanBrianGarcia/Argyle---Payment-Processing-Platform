@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Application.Common;
 using PaymentPlatform.Contracts.Payments;
 
 namespace PaymentPlatform.Application.Features.GetPayment;
@@ -32,13 +33,12 @@ public sealed class GetPaymentQueryHandler : IRequestHandler<GetPaymentQuery, Pa
             return null;
         }
 
-        return new PaymentResponse(
-            Id: payment.Id,
-            AmountMinor: payment.Amount.AmountMinor,
-            Currency: payment.Amount.Currency,
-            Status: payment.Status.ToString(),
-            CustomerReference: payment.CustomerReference,
-            Metadata: payment.Metadata,
-            CreatedAt: payment.CreatedAt);
+        var events = await _db.PaymentEvents
+            .AsNoTracking()
+            .Where(e => e.PaymentId == payment.Id)
+            .OrderBy(e => e.At)
+            .ToListAsync(cancellationToken);
+
+        return PaymentResponseSerializer.ToResponse(payment, events);
     }
 }

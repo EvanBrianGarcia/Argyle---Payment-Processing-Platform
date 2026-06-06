@@ -18,9 +18,13 @@ public static class DependencyInjection
             ?? throw new InvalidOperationException(
                 "Connection string 'Payments' is not configured.");
 
-        services.AddDbContext<PaymentsDbContext>(options =>
-            options.UseNpgsql(connectionString, npgsql =>
-                npgsql.MigrationsAssembly(typeof(PaymentsDbContext).Assembly.FullName)));
+        services.AddSingleton<PaymentVersionInterceptor>();
+
+        services.AddDbContext<PaymentsDbContext>((sp, options) =>
+            options
+                .UseNpgsql(connectionString, npgsql =>
+                    npgsql.MigrationsAssembly(typeof(PaymentsDbContext).Assembly.FullName))
+                .AddInterceptors(sp.GetRequiredService<PaymentVersionInterceptor>()));
 
         services.AddScoped<IPaymentsDbContext>(sp =>
             sp.GetRequiredService<PaymentsDbContext>());

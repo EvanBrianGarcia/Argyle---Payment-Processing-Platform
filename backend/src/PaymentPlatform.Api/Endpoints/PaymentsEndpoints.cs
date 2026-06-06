@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using PaymentPlatform.Application.Features.CapturePayment;
 using PaymentPlatform.Application.Features.CreatePayment;
 using PaymentPlatform.Application.Features.GetPayment;
 using PaymentPlatform.Contracts.Payments;
@@ -18,6 +19,7 @@ public static class PaymentsEndpoints
 
         group.MapPost("/", CreatePaymentAsync);
         group.MapGet("/{id}", GetPaymentAsync);
+        group.MapPost("/{id}/capture", CapturePaymentAsync);
 
         return routes;
     }
@@ -62,6 +64,32 @@ public static class PaymentsEndpoints
                 code: "payment_not_found",
                 message: $"Payment '{id}' was not found.");
         }
+        return Results.Ok(response);
+    }
+
+    private static async Task<IResult> CapturePaymentAsync(
+        string id,
+        [FromBody] CapturePaymentRequest? request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        IValidator<CapturePaymentCommand> validator,
+        IMediator mediator,
+        CancellationToken cancellationToken)
+    {
+        var command = new CapturePaymentCommand(
+            PaymentId: id,
+            IdempotencyKey: idempotencyKey ?? string.Empty,
+            AmountMinor: request?.AmountMinor);
+
+        var result = await validator.ValidateAsync(command, cancellationToken);
+        if (!result.IsValid)
+        {
+            var failures = result.Errors
+                .Select(e => new AppValidationFailure(e.PropertyName, e.ErrorMessage))
+                .ToList();
+            throw new AppValidationException(failures);
+        }
+
+        var response = await mediator.Send(command, cancellationToken);
         return Results.Ok(response);
     }
 }

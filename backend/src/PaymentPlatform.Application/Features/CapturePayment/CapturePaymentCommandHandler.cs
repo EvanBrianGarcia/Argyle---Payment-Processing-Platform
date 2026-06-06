@@ -7,16 +7,22 @@ using PaymentPlatform.Contracts.Payments;
 using PaymentPlatform.Domain.Idempotency;
 using PaymentPlatform.Domain.Payments;
 
-namespace PaymentPlatform.Application.Features.CreatePayment;
+namespace PaymentPlatform.Application.Features.CapturePayment;
 
-public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentCommand, PaymentResponse>
+public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymentCommand, PaymentResponse>
 {
+    private static readonly JsonSerializerOptions ResponseJsonOptions = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
     private readonly IPaymentsDbContext _db;
     private readonly IIdempotencyStore _idempotency;
     private readonly ICurrentMerchant _currentMerchant;
     private readonly IClock _clock;
 
-    public CreatePaymentCommandHandler(
+    public CapturePaymentCommandHandler(
         IPaymentsDbContext db,
         IIdempotencyStore idempotency,
         ICurrentMerchant currentMerchant,
@@ -29,7 +35,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
     }
 
     public async Task<PaymentResponse> Handle(
-        CreatePaymentCommand command,
+        CapturePaymentCommand command,
         CancellationToken cancellationToken)
     {
         var merchantId = _currentMerchant.MerchantId;
@@ -37,7 +43,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
 
         var existing = await _idempotency.FindAsync(
             merchantId,
-            IdempotencyOperations.CreatePayment,
+            IdempotencyOperations.CapturePayment,
             command.IdempotencyKey,
             cancellationToken);
 
@@ -50,39 +56,57 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
             return PaymentResponseSerializer.Deserialize(existing.ResponseBody);
         }
 
-        var money = new Money(command.AmountMinor, command.Currency);
-        var payment = Payment.Create(
-            merchantId: merchantId,
-            amount: money,
-            cardToken: command.CardToken,
-            customerReference: command.CustomerReference,
-            metadata: command.Metadata,
-            now: _clock.UtcNow);
+        // Tracking load — optimistic concurrency on payments.version requires
+        // EF to retain the original row version.
+        var payment = await _db.Payments
+            .Where(p => p.MerchantId == merchantId && p.Id == command.PaymentId)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        _db.Payments.Add(payment);
+        if (payment is null)
+        {
+            throw new NotFoundException(
+                code: "payment_not_found",
+                message: $"Payment '{command.PaymentId}' was not found.");
+        }
 
-        // Task 7 will append the initial null → Pending event here; for Task 4
-        // we keep the events list empty so the response shape is consistent.
-        var response = PaymentResponseSerializer.ToResponse(payment, Array.Empty<PaymentEvent>());
+        // payment.Capture throws InvalidTransitionException on illegal states.
+        // The middleware maps it to 409 invalid_state_transition.
+        var evt = payment.Capture(_clock.UtcNow);
+        _db.PaymentEvents.Add(evt);
+
+        var priorEvents = await _db.PaymentEvents
+            .AsNoTracking()
+            .Where(e => e.PaymentId == payment.Id)
+            .OrderBy(e => e.At)
+            .ToListAsync(cancellationToken);
+
+        var response = PaymentResponseSerializer.ToResponse(payment, priorEvents.Append(evt));
         var responseBody = PaymentResponseSerializer.Serialize(response);
+
         var record = new IdempotencyKeyRecord(
             merchantId: merchantId,
-            operation: IdempotencyOperations.CreatePayment,
+            operation: IdempotencyOperations.CapturePayment,
             key: command.IdempotencyKey,
             requestHash: requestHash,
-            responseStatus: StatusCodes.Created,
+            responseStatus: StatusCodes.OK,
             responseBody: responseBody,
             createdAt: _clock.UtcNow);
 
         try
         {
+            // SaveAsync flushes the tracked payment update, the new event row,
+            // and the new idempotency row in one transaction.
             await _idempotency.SaveAsync(record, cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new ConcurrencyConflictException();
         }
         catch (DbUpdateException)
         {
             var winner = await _idempotency.FindAsync(
                 merchantId,
-                IdempotencyOperations.CreatePayment,
+                IdempotencyOperations.CapturePayment,
                 command.IdempotencyKey,
                 cancellationToken);
 
@@ -96,21 +120,18 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         return response;
     }
 
-    private static string ComputeRequestHash(CreatePaymentCommand command)
+    private static string ComputeRequestHash(CapturePaymentCommand command)
     {
         var payload = new
         {
+            payment_id = command.PaymentId,
             amount_minor = command.AmountMinor,
-            currency = command.Currency,
-            card_token = command.CardToken,
-            customer_reference = command.CustomerReference,
-            metadata = command.Metadata ?? new Dictionary<string, string>(0),
         };
         return CanonicalJson.Hash(JsonSerializer.Serialize(payload));
     }
 
     private static class StatusCodes
     {
-        public const int Created = 201;
+        public const int OK = 200;
     }
 }

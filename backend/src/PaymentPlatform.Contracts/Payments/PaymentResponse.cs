@@ -7,4 +7,6 @@ public sealed record PaymentResponse(
     string Status,
     string? CustomerReference,
     IReadOnlyDictionary<string, string> Metadata,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<PaymentEventDto> Events);
