@@ -13,6 +13,9 @@ using Prometheus;
 using Serilog;
 using Serilog.Formatting.Compact;
 
+// Bootstrap logger fires before DI exists — skip RedactingEnricher here.
+// Fatal startup messages should not contain card data, so a missed
+// redaction in this narrow window is theoretical.
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
     .Enrich.With<TraceIdEnricher>()
@@ -23,10 +26,11 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseSerilog((ctx, _, cfg) => cfg
+    builder.Host.UseSerilog((ctx, services, cfg) => cfg
         .ReadFrom.Configuration(ctx.Configuration)
         .Enrich.FromLogContext()
         .Enrich.With<TraceIdEnricher>()
+        .Enrich.With(services.GetRequiredService<RedactingEnricher>())
         .WriteTo.Console(new CompactJsonFormatter()));
 
     builder.Services.AddApiServices();
@@ -34,6 +38,10 @@ try
     builder.Services.AddPaymentMessagingPublisher(builder.Configuration);
     builder.Services.AddSingleton<RabbitMqHealthProbe>();
     builder.Services.AddPaymentsTelemetry(builder.Configuration, "PaymentPlatform.Api");
+
+    builder.Services.Configure<RedactionOptions>(
+        builder.Configuration.GetSection(RedactionOptions.SectionName));
+    builder.Services.AddSingleton<RedactingEnricher>();
 
     builder.Services
         .AddOptions<OutboxDispatcherOptions>()

@@ -77,10 +77,16 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
 
         // Replace the default ILogger with Serilog so TraceIdEnricher can
         // surface trace_id/span_id on the worker's consumer log lines —
-        // mirrors the production Worker's Serilog pipeline.
+        // mirrors the production Worker's Serilog pipeline, including the
+        // Phase 4 Task 6 RedactingEnricher. The enricher is constructed
+        // directly here because the Serilog logger lives outside the host
+        // DI scope (built before host.Build()).
+        var redactingEnricher = new RedactingEnricher(
+            Microsoft.Extensions.Options.Options.Create(new RedactionOptions()));
         var serilogLogger = new LoggerConfiguration()
             .Enrich.FromLogContext()
             .Enrich.With<TraceIdEnricher>()
+            .Enrich.With(redactingEnricher)
             .WriteTo.Sink(logSink)
             .CreateLogger();
         builder.Logging.ClearProviders();

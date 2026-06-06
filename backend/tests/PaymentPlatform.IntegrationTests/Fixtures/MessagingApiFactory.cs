@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PaymentPlatform.Infrastructure.Diagnostics;
 using Serilog;
@@ -39,10 +40,11 @@ public sealed class MessagingApiFactory : WebApplicationFactory<PaymentPlatform.
         Environment.SetEnvironmentVariable(
             "Serilog__MinimumLevel__Override__Microsoft.AspNetCore", "Information");
 
-        builder.UseSerilog((ctx, _, cfg) => cfg
+        builder.UseSerilog((ctx, services, cfg) => cfg
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.FromLogContext()
             .Enrich.With<TraceIdEnricher>()
+            .Enrich.With(services.GetRequiredService<RedactingEnricher>())
             .WriteTo.Sink(LogSink));
 
         return base.CreateHost(builder);

@@ -26,10 +26,15 @@ try
     // "lean" recommendation.
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseSerilog((_, _, cfg) => cfg
+    builder.Host.UseSerilog((_, services, cfg) => cfg
         .Enrich.FromLogContext()
         .Enrich.With<TraceIdEnricher>()
+        .Enrich.With(services.GetRequiredService<RedactingEnricher>())
         .WriteTo.Console(new CompactJsonFormatter()));
+
+    builder.Services.Configure<RedactionOptions>(
+        builder.Configuration.GetSection(RedactionOptions.SectionName));
+    builder.Services.AddSingleton<RedactingEnricher>();
 
     // Restrict Kestrel to the metrics port only — the worker is not a public
     // API surface and should never serve anything else. Default 9090 matches
