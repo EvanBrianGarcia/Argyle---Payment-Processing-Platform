@@ -6,6 +6,7 @@
     <Project Path="src/PaymentPlatform.Domain/PaymentPlatform.Domain.csproj" />
     <Project Path="src/PaymentPlatform.Infrastructure/PaymentPlatform.Infrastructure.csproj" />
     <Project Path="src/PaymentPlatform.Messaging/PaymentPlatform.Messaging.csproj" />
+    <Project Path="src/PaymentPlatform.Worker/PaymentPlatform.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PaymentPlatform.IntegrationTests/PaymentPlatform.IntegrationTests.csproj" />

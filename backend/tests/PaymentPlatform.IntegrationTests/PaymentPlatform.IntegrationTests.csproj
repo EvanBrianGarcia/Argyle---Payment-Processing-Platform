@@ -13,6 +13,8 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.8" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="MassTransit" Version="8.5.4" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.4" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.12.0" />
     <PackageReference Include="Testcontainers.RabbitMq" Version="4.12.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
@@ -28,6 +30,7 @@
     <ProjectReference Include="..\..\src\PaymentPlatform.Application\PaymentPlatform.Application.csproj" />
     <ProjectReference Include="..\..\src\PaymentPlatform.Infrastructure\PaymentPlatform.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\PaymentPlatform.Contracts\PaymentPlatform.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\PaymentPlatform.Messaging\PaymentPlatform.Messaging.csproj" />
   </ItemGroup>
 
 </Project>

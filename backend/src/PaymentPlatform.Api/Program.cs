@@ -4,6 +4,7 @@ using PaymentPlatform.Api.Diagnostics;
 using PaymentPlatform.Api.Endpoints;
 using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Infrastructure;
+using PaymentPlatform.Infrastructure.Messaging;
 using PaymentPlatform.Infrastructure.Persistence;
 using Serilog;
 using Serilog.Formatting.Compact;
@@ -26,6 +27,7 @@ try
 
     builder.Services.AddApiServices();
     builder.Services.AddInfrastructure(builder.Configuration);
+    builder.Services.AddPaymentMessagingPublisher(builder.Configuration);
 
     var app = builder.Build();
 

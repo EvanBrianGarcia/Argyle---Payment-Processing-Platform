@@ -3,9 +3,12 @@
   <ItemGroup>
     <ProjectReference Include="..\PaymentPlatform.Application\PaymentPlatform.Application.csproj" />
     <ProjectReference Include="..\PaymentPlatform.Domain\PaymentPlatform.Domain.csproj" />
+    <ProjectReference Include="..\PaymentPlatform.Messaging\PaymentPlatform.Messaging.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="MassTransit" Version="8.5.4" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.5.4" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.8">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
