@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Application.Diagnostics;
 using PaymentPlatform.Domain.Payments;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Messaging.Settlement;
@@ -40,6 +41,9 @@ public sealed class SettlePaymentConsumer : IConsumer<SettlePayment>
     public async Task Consume(ConsumeContext<SettlePayment> context)
     {
         var message = context.Message;
+        using var activity = PaymentsActivitySource.Source.StartActivity("Settlement.Consume");
+        activity?.SetTag("payment_id", message.PaymentId);
+        activity?.SetTag("merchant_id", message.MerchantId);
         using var paymentScope = SerilogLogContext.PushProperty("payment_id", message.PaymentId);
         using var traceScope = SerilogLogContext.PushProperty("trace_id", message.CorrelationId);
 

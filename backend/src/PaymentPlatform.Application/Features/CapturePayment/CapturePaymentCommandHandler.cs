@@ -3,6 +3,7 @@ using MediatR;
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
+using PaymentPlatform.Application.Diagnostics;
 using PaymentPlatform.Contracts.Payments;
 
 namespace PaymentPlatform.Application.Features.CapturePayment;
@@ -52,6 +53,10 @@ public sealed class CapturePaymentCommandHandler : IRequestHandler<CapturePaymen
         CapturePaymentCommand command,
         CancellationToken cancellationToken)
     {
+        using var activity = PaymentsActivitySource.Source.StartActivity("CapturePayment.Handle");
+        activity?.SetTag("merchant_id", merchantId);
+        activity?.SetTag("payment_id", command.PaymentId);
+
         // Tracking load — optimistic concurrency on payments.version requires
         // EF to retain the original row version.
         var payment = await _db.Payments

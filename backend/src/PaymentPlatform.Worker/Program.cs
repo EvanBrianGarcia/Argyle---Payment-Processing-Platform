@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Infrastructure.Clock;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Infrastructure.Processing;
 using PaymentPlatform.Messaging.Settlement;
@@ -35,6 +36,8 @@ try
         builder.Configuration.GetSection(StubProcessorOptions.SectionName));
     builder.Services.AddSingleton<StubPaymentProcessor>();
     builder.Services.AddSingleton<IPaymentProcessor>(sp => sp.GetRequiredService<StubPaymentProcessor>());
+
+    builder.Services.AddPaymentsTelemetry(builder.Configuration, "PaymentPlatform.Worker");
 
     var retryOptions = builder.Configuration
         .GetSection(WorkerRetryOptions.SectionName)

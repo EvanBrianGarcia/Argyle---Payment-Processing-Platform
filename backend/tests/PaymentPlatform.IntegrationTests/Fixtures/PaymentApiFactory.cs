@@ -7,7 +7,7 @@ using Serilog;
 
 namespace PaymentPlatform.IntegrationTests.Fixtures;
 
-public sealed class PaymentApiFactory : WebApplicationFactory<Program>
+public sealed class PaymentApiFactory : WebApplicationFactory<PaymentPlatform.Api.Program>
 {
     private readonly string _connectionString;
 

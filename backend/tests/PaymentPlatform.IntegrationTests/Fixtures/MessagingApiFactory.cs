@@ -9,7 +9,7 @@ namespace PaymentPlatform.IntegrationTests.Fixtures;
 /// WebApplicationFactory for tests that talk to a real RabbitMQ broker.
 /// Mirrors PaymentApiFactory's env-var wiring approach and adds the RabbitMq
 /// host/port env vars on top of the Postgres connection string.
-public sealed class MessagingApiFactory : WebApplicationFactory<Program>
+public sealed class MessagingApiFactory : WebApplicationFactory<PaymentPlatform.Api.Program>
 {
     private readonly MessagingFixture _fixture;
     private readonly int? _rabbitMqPortOverride;

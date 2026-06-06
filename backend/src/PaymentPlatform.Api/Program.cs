@@ -7,6 +7,7 @@ using PaymentPlatform.Api.HealthChecks;
 using PaymentPlatform.Api.HostedServices;
 using PaymentPlatform.Api.Middleware;
 using PaymentPlatform.Infrastructure;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Messaging;
 using PaymentPlatform.Infrastructure.Persistence;
 using Serilog;
@@ -32,6 +33,7 @@ try
     builder.Services.AddInfrastructure(builder.Configuration);
     builder.Services.AddPaymentMessagingPublisher(builder.Configuration);
     builder.Services.AddSingleton<RabbitMqHealthProbe>();
+    builder.Services.AddPaymentsTelemetry(builder.Configuration, "PaymentPlatform.Api");
 
     builder.Services
         .AddOptions<OutboxDispatcherOptions>()
@@ -67,4 +69,7 @@ finally
     Log.CloseAndFlush();
 }
 
-public partial class Program { }
+namespace PaymentPlatform.Api
+{
+    public partial class Program { }
+}

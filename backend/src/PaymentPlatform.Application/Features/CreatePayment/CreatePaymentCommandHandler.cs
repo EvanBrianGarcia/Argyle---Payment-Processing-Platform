@@ -2,6 +2,7 @@ using System.Text.Json;
 using MediatR;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Common;
+using PaymentPlatform.Application.Diagnostics;
 using PaymentPlatform.Contracts.Payments;
 using PaymentPlatform.Domain.Payments;
 
@@ -49,6 +50,10 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         CreatePaymentCommand command,
         CancellationToken cancellationToken)
     {
+        using var activity = PaymentsActivitySource.Source.StartActivity("CreatePayment.Handle");
+        activity?.SetTag("merchant_id", merchantId);
+        activity?.SetTag("currency", command.Currency);
+
         var money = new Money(command.AmountMinor, command.Currency);
         var payment = Payment.Create(
             merchantId: merchantId,
@@ -59,6 +64,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
             now: _clock.UtcNow);
 
         _db.Payments.Add(payment);
+        activity?.SetTag("payment_id", payment.Id);
 
         var initialEvent = payment.CreateInitialEvent(_clock.UtcNow);
         _db.PaymentEvents.Add(initialEvent);
