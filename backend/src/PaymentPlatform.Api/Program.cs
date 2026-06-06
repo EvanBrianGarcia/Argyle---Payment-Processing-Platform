@@ -40,6 +40,7 @@ try
         .AddOptions<OutboxDispatcherOptions>()
         .Bind(builder.Configuration.GetSection(OutboxDispatcherOptions.SectionName));
     builder.Services.AddHostedService<OutboxDispatcher>();
+    builder.Services.AddHostedService<PaymentStatusGaugeUpdater>();
 
     var app = builder.Build();
 

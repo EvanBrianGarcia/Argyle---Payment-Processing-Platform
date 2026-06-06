@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Infrastructure.Diagnostics;
+using PaymentPlatform.Infrastructure.Messaging;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Messaging.Settlement;
 using PaymentPlatform.Worker.Consumers;
@@ -57,9 +59,16 @@ internal sealed class SettlementWorkerHost : IAsyncDisposable
         builder.Services.AddScoped<IPaymentsDbContext>(sp =>
             sp.GetRequiredService<PaymentsDbContext>());
 
+        // Register the same meter/observer wiring the production Worker uses
+        // so MetricsEndpointTests' worker-driven assertions observe the
+        // queue counters in the process-shared default registry.
+        builder.Services.AddSingleton<PaymentsMeter>();
+        builder.Services.AddSingleton<IPaymentsMeter>(sp => sp.GetRequiredService<PaymentsMeter>());
+
         builder.Services.AddMassTransit(cfg =>
         {
             cfg.AddConsumer<SettlePaymentConsumer>();
+            cfg.AddConsumeObserver<MetricsConsumerObserver>();
 
             cfg.UsingRabbitMq((context, rmq) =>
             {

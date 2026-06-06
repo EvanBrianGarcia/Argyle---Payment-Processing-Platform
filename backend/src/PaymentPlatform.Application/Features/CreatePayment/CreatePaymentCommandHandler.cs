@@ -16,17 +16,20 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
     private readonly IdempotencyExecutor _executor;
     private readonly ICurrentMerchant _currentMerchant;
     private readonly IClock _clock;
+    private readonly IPaymentsMeter _meter;
 
     public CreatePaymentCommandHandler(
         IPaymentsDbContext db,
         IdempotencyExecutor executor,
         ICurrentMerchant currentMerchant,
-        IClock clock)
+        IClock clock,
+        IPaymentsMeter meter)
     {
         _db = db;
         _executor = executor;
         _currentMerchant = currentMerchant;
         _clock = clock;
+        _meter = meter;
     }
 
     public Task<PaymentResponse> Handle(
@@ -70,6 +73,7 @@ public sealed class CreatePaymentCommandHandler : IRequestHandler<CreatePaymentC
         _db.PaymentEvents.Add(initialEvent);
 
         var response = PaymentResponseSerializer.ToResponse(payment, new[] { initialEvent });
+        _meter.RecordPaymentCreated(command.Currency, merchantId);
         return Task.FromResult(response);
     }
 

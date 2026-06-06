@@ -15,17 +15,20 @@ public sealed class RefundPaymentCommandHandler : IRequestHandler<RefundPaymentC
     private readonly IdempotencyExecutor _executor;
     private readonly ICurrentMerchant _currentMerchant;
     private readonly IClock _clock;
+    private readonly IPaymentsMeter _meter;
 
     public RefundPaymentCommandHandler(
         IPaymentsDbContext db,
         IdempotencyExecutor executor,
         ICurrentMerchant currentMerchant,
-        IClock clock)
+        IClock clock,
+        IPaymentsMeter meter)
     {
         _db = db;
         _executor = executor;
         _currentMerchant = currentMerchant;
         _clock = clock;
+        _meter = meter;
     }
 
     public Task<PaymentResponse> Handle(
@@ -73,6 +76,7 @@ public sealed class RefundPaymentCommandHandler : IRequestHandler<RefundPaymentC
             .OrderBy(e => e.At)
             .ToListAsync(cancellationToken);
 
+        _meter.RecordRefund(payment.Amount.Currency);
         return PaymentResponseSerializer.ToResponse(payment, priorEvents.Append(evt));
     }
 

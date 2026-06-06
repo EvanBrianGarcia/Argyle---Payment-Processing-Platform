@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Infrastructure.Clock;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Idempotency;
 using PaymentPlatform.Infrastructure.Persistence;
 
@@ -31,6 +32,16 @@ public static class DependencyInjection
 
         services.AddScoped<IIdempotencyStore, IdempotencyStore>();
         services.AddSingleton<IClock, SystemClock>();
+
+        // PaymentsMeter wraps the process-global prometheus-net default
+        // registry; singleton lifetime keeps every handler/observer pointing
+        // at the same counters.
+        services.AddSingleton<PaymentsMeter>();
+        services.AddSingleton<IPaymentsMeter>(sp => sp.GetRequiredService<PaymentsMeter>());
+
+        services
+            .AddOptions<DiagnosticsOptions>()
+            .Bind(configuration.GetSection(DiagnosticsOptions.SectionName));
 
         return services;
     }

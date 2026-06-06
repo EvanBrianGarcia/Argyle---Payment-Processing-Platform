@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PaymentPlatform.Application.Abstractions;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Worker.Consumers;
 
@@ -50,6 +51,12 @@ internal sealed class SettlementConsumerHost : IAsyncDisposable
             options.UseNpgsql(connectionString));
         builder.Services.AddScoped<IPaymentsDbContext>(sp =>
             sp.GetRequiredService<PaymentsDbContext>());
+
+        // PaymentsMeter is now a SettlePaymentConsumer dependency. Without
+        // this registration the harness fails to construct the consumer and
+        // every settlement message times out.
+        builder.Services.AddSingleton<PaymentsMeter>();
+        builder.Services.AddSingleton<IPaymentsMeter>(sp => sp.GetRequiredService<PaymentsMeter>());
 
         builder.Services.AddMassTransitTestHarness(cfg =>
         {

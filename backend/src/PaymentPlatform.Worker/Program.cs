@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Infrastructure.Clock;
 using PaymentPlatform.Infrastructure.Diagnostics;
+using PaymentPlatform.Infrastructure.Messaging;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Infrastructure.Processing;
 using PaymentPlatform.Messaging.Settlement;
@@ -39,6 +40,13 @@ try
 
     builder.Services.AddPaymentsTelemetry(builder.Configuration, "PaymentPlatform.Worker");
 
+    builder.Services.AddSingleton<PaymentsMeter>();
+    builder.Services.AddSingleton<IPaymentsMeter>(sp => sp.GetRequiredService<PaymentsMeter>());
+    builder.Services
+        .AddOptions<DiagnosticsOptions>()
+        .Bind(builder.Configuration.GetSection(DiagnosticsOptions.SectionName));
+    builder.Services.AddHostedService<PaymentStatusGaugeUpdater>();
+
     var retryOptions = builder.Configuration
         .GetSection(WorkerRetryOptions.SectionName)
         .Get<WorkerRetryOptions>() ?? new WorkerRetryOptions();
@@ -46,6 +54,7 @@ try
     builder.Services.AddMassTransit(cfg =>
     {
         cfg.AddConsumer<SettlePaymentConsumer>();
+        cfg.AddConsumeObserver<MetricsConsumerObserver>();
 
         cfg.UsingRabbitMq((context, rmq) =>
         {

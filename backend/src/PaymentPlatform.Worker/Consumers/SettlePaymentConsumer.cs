@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Application.Diagnostics;
 using PaymentPlatform.Domain.Payments;
+using PaymentPlatform.Infrastructure.Diagnostics;
 using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Messaging.Settlement;
 using SerilogLogContext = Serilog.Context.LogContext;
@@ -21,25 +22,42 @@ namespace PaymentPlatform.Worker.Consumers;
 /// DLQ binding that interprets these.
 public sealed class SettlePaymentConsumer : IConsumer<SettlePayment>
 {
+    private const string SettlementQueue = "settlement";
+
     private readonly PaymentsDbContext _db;
     private readonly IPaymentProcessor _processor;
     private readonly IClock _clock;
     private readonly ILogger<SettlePaymentConsumer> _logger;
+    private readonly PaymentsMeter _meter;
 
     public SettlePaymentConsumer(
         PaymentsDbContext db,
         IPaymentProcessor processor,
         IClock clock,
-        ILogger<SettlePaymentConsumer> logger)
+        ILogger<SettlePaymentConsumer> logger,
+        PaymentsMeter meter)
     {
         _db = db;
         _processor = processor;
         _clock = clock;
         _logger = logger;
+        _meter = meter;
     }
 
     public async Task Consume(ConsumeContext<SettlePayment> context)
     {
+        // Increment retries here, not in MetricsConsumerObserver: MassTransit's
+        // consume-observer pipeline wraps the retry filter, so ConsumeFault
+        // fires only once per delivery (after retries exhaust) with the outer
+        // ConsumeContext, which has lost its RetryContext payload by then.
+        // The inner ConsumeContext seen by the consumer DOES carry the live
+        // RetryContext, so context.GetRetryAttempt() here is the canonical
+        // source for per-attempt counting.
+        if (context.GetRetryAttempt() > 0)
+        {
+            _meter.RecordRetry(SettlementQueue);
+        }
+
         var message = context.Message;
         using var activity = PaymentsActivitySource.Source.StartActivity("Settlement.Consume");
         activity?.SetTag("payment_id", message.PaymentId);
