@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using PaymentPlatform.Application.Abstractions;
 using PaymentPlatform.Infrastructure.Persistence;
+using PaymentPlatform.Infrastructure.Processing;
 using PaymentPlatform.Messaging.Settlement;
 using PaymentPlatform.Worker.Consumers;
 using Serilog;
@@ -26,6 +27,11 @@ try
     builder.Services.AddDbContext<PaymentsDbContext>(options =>
         options.UseNpgsql(connectionString));
     builder.Services.AddScoped<IPaymentsDbContext>(sp => sp.GetRequiredService<PaymentsDbContext>());
+
+    builder.Services.Configure<StubProcessorOptions>(
+        builder.Configuration.GetSection(StubProcessorOptions.SectionName));
+    builder.Services.AddSingleton<StubPaymentProcessor>();
+    builder.Services.AddSingleton<IPaymentProcessor>(sp => sp.GetRequiredService<StubPaymentProcessor>());
 
     builder.Services.AddMassTransit(cfg =>
     {
