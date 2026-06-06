@@ -1,13 +1,16 @@
 # Argyle — Payment Processing Platform
 
 A simplified payment processing platform built for the Argyle senior engineer
-take-home. This repository contains **Phases 1, 2, and 3**: the vertical
+take-home. This repository contains **Phases 1, 2, 3, and 4**: the vertical
 slice that proves the spine works end-to-end (Phase 1), the full payment
 state machine with capture, refund, list, and per-transition audit events
-(Phase 2), and the async settlement worker — transactional outbox,
+(Phase 2), the async settlement worker — transactional outbox,
 RabbitMQ-backed publish, idempotent consumer, retry policy + DLQ, RabbitMQ
-readiness probe (Phase 3). The React dashboard and the full OpenTelemetry
-wiring land in later phases (see [What's next](#whats-next)).
+readiness probe (Phase 3), and the observability wiring — OpenTelemetry
+trace propagation across the API → MQ → Worker boundary, Prometheus
+metrics on dedicated endpoints, response `traceparent` header, and a
+property-deny-list log redaction enricher (Phase 4). The React dashboard
+lands in Phase 5 (see [What's next](#whats-next)).
 
 The exercise brief lives at [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 The implementation plan lives under [`.claude/plans/`](.claude/plans).
@@ -43,10 +46,15 @@ The implementation plan lives under [`.claude/plans/`](.claude/plans).
 | Exponential retry policy with `Ignore<PermanentSettlementFailureException>` |   3   |
 | `settlement_error` DLQ catches permanent failures, payment stays Captured | 3 |
 | `GET /health/ready` — Postgres + RabbitMQ readiness probes       |   3   |
-| OpenTelemetry traces + Prometheus metrics                        |   4   |
+| OpenTelemetry SDK + auto-instrumentation (API + Worker)          |   4   |
+| W3C `traceparent` propagation across the RabbitMQ envelope       |   4   |
+| Response `traceparent` header + `trace_id`/`span_id` on every log line | 4 |
+| `/metrics` endpoint with RED + business + queue counters         |   4   |
+| Worker `/metrics` on a dedicated port (`:9090`)                  |   4   |
+| Log redaction enricher (deny list: `card_token`, `cvv`, `pan`, …) at every nesting depth | 4 |
 | React dashboard                                                  |   5   |
 
-Phases 1, 2, and 3 prioritize operational depth on a small surface, not breadth.
+Phases 1–4 prioritize operational depth on a small surface, not breadth.
 
 ---
 
@@ -343,6 +351,173 @@ Reset with `docker compose stop worker && docker compose up -d worker`
 
 ---
 
+## Phase 4 — observability walkthrough
+
+Phase 4 wires three independent telemetry pipelines so a reviewer can pull
+`trace_id=abc…` out of any log line and walk through a payment's full
+life — `POST /v1/payments` → capture → outbox publish → MassTransit consume
+→ state update — across both the API and the Worker. Three rationale
+documents in `docs/adr/`:
+
+| ADR | Decision |
+| --- | --- |
+| [0011](docs/adr/0011-opentelemetry-sdk-and-default-exporter.md) | OpenTelemetry SDK + console exporter default; OTLP exporter conditional on `OpenTelemetry:Otlp:Endpoint`. |
+| [0012](docs/adr/0012-prometheus-net-for-metrics.md) | `prometheus-net` for `/metrics`, not the OTel Prometheus exporter. |
+| [0013](docs/adr/0013-log-redaction-deny-list.md) | Log redaction is a property-name deny list at the Serilog enricher layer with an explicit allow-list carve-out. |
+
+### One mental model
+
+Everything reads from `Activity.Current` as the source of truth. The OTel
+SDK populates it for HTTP requests, EF Core queries, and MassTransit
+publish/consume. Serilog's `TraceIdEnricher` reads it and stamps
+`trace_id` + `span_id` onto every log event. `/metrics` is a separate
+pipeline (prometheus-net) but reads the same `Activity.Current` for
+trace-aware labels. Both pipelines can ride the same OTLP collector
+later — only `OpenTelemetry:Otlp:Endpoint` needs to be set.
+
+### Scrape metrics
+
+```bash
+# RED + business counters from the API (port 8080 in container, 5000 on host)
+curl -s http://localhost:5000/metrics | grep -E "^(http_requests_received|payments_)"
+
+# Queue + processing-duration counters from the Worker (dedicated port 9090)
+curl -s http://localhost:9090/metrics | grep -E "^mq_"
+```
+
+The API exposes:
+
+| Metric | Type | Labels | Source |
+| --- | --- | --- | --- |
+| `http_requests_received_total` | counter | `code`, `method`, `controller`, `action` | prometheus-net AspNetCore middleware |
+| `http_request_duration_seconds` | histogram | same | prometheus-net AspNetCore middleware |
+| `payments_created_total` | counter | `currency`, `merchant_id` | `CreatePaymentCommandHandler` |
+| `refunds_total` | counter | `currency` | `RefundPaymentCommandHandler` |
+| `payments_by_status` | gauge | `status` | `PaymentStatusGaugeUpdater` (samples DB on a 30s cadence) |
+
+The Worker exposes:
+
+| Metric | Type | Labels | Source |
+| --- | --- | --- | --- |
+| `mq_consumed_total` | counter | `queue` | `MetricsConsumerObserver.PostConsume` |
+| `mq_retries_total` | counter | `queue` | observer (transient-fault path) |
+| `mq_deadletter_total` | counter | `queue` | observer (permanent-fault path) |
+| `mq_processing_duration_seconds` | histogram | `queue` | observer (per-message duration) |
+
+`mq_queue_depth` is not currently exposed — RabbitMQ already publishes
+queue depth via its management API; tracking it from the consumer side
+would double-count.
+
+### Optional: run Prometheus locally
+
+```bash
+# Edit docker-compose.yml — uncomment the `prometheus` service block
+# and the `prometheus-data:` volume. Then:
+docker compose up -d prometheus
+open http://localhost:9091
+```
+
+The scrape config lives in [`ops/prometheus.example.yml`](ops/prometheus.example.yml) —
+edit that file rather than inlining scrape rules into `docker-compose.yml`.
+Both `payments-api` and `payments-worker` targets should show UP within
+~15s.
+
+### Inspect traces
+
+The console exporter emits each span as JSON to the API and Worker
+container logs. Filter by span-bearing lines:
+
+```bash
+docker compose logs api worker | grep -E '"TraceId":"[0-9a-f]{32}"'
+```
+
+For a real trace backend (Tempo, Jaeger, Honeycomb, Datadog), set the
+OTLP endpoint and restart:
+
+```bash
+OPENTELEMETRY__OTLP__ENDPOINT=http://otel-collector:4317 \
+  docker compose up -d --force-recreate api worker
+```
+
+Every response now carries a `traceparent` header in W3C format —
+`00-<32 hex>-<16 hex>-<2 hex>` — so a downstream service can adopt the
+same trace context without parsing log lines:
+
+```bash
+curl -i -X POST http://localhost:5000/v1/payments \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}' \
+  | grep -i '^traceparent'
+```
+
+If the request comes in carrying its own `traceparent` header, the API
+adopts that trace id as the parent — verified by
+`TracePropagationTests.IncomingTraceparent_BecomesParentOfServerSpan`.
+
+### Walk one payment across both processes
+
+```bash
+RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
+PID=$(echo "$RESP" | jq -r .id)
+
+docker compose exec postgres psql -U postgres payments -c \
+  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';"
+
+# Capture and grab the traceparent that comes back on the response
+TRACEPARENT=$(curl -s -D - -X POST http://localhost:5000/v1/payments/$PID/capture \
+  -H "Authorization: Bearer dev-key-mrc-acme" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" -d '{}' -o /dev/null \
+  | grep -i '^traceparent:' | awk '{print $2}' | tr -d '\r')
+TRACE_ID=$(echo "$TRACEPARENT" | cut -d- -f2)
+echo "trace_id=$TRACE_ID"
+
+sleep 3
+
+# Both API and Worker log lines tagged with the capture's trace_id
+docker compose logs api worker | grep "\"trace_id\":\"$TRACE_ID\""
+```
+
+### How redaction works
+
+`RedactingEnricher` (Serilog `ILogEventEnricher`) walks every log event's
+property bag — including nested `StructureValue`, `SequenceValue`, and
+`DictionaryValue` — and replaces values whose property name (normalized
+case-insensitively and with underscores stripped) matches the deny list.
+The allow list overrides matches so `trace_token` survives the literal
+substring intuition.
+
+Defaults from ADR-0013:
+
+| List | Names |
+| --- | --- |
+| Denied | `card_token`, `cvv`, `cvc`, `pan`, `authorization`, `api_key`, `password`, `secret`, `token` |
+| Allowed | `trace_token`, `trace_id`, `request_id`, `correlation_id` |
+
+Both lists are configurable per environment under `Logging:Redaction`
+in `appsettings.json`. The enricher honors the configured lists at
+construction time — adding a new field to the deny list is a config
+change with no code change.
+
+The integration test
+`RedactionEndToEndTests.PostPayments_WithCardTokenInBody_DoesNotLeakTokenIntoLogSink`
+proves the wiring is plumbed all the way to the test fixture's
+`InMemoryLogSink`; the unit suite
+(`RedactingEnricherTests`) covers the structural walk, case-insensitivity,
+allow-list override, null tolerance, and the depth-cap guard.
+
+A regression that introduces a new structured log call destructuring a
+request body — e.g. `_logger.LogInformation("Payment {@Command}", command)` —
+will not leak `card_token`; it gets stamped `"***"` on the way out.
+
+---
+
 ## Payment state machine
 
 Phase 2's `Payment` aggregate enforces every transition. Illegal transitions
@@ -530,9 +705,10 @@ they're dev affordances for the take-home.
 
 ```bash
 cd backend
-dotnet test                    # 216 tests + 1 skip: 139 unit + 77 integration + 1 superseded wiring smoke
+dotnet test                    # 258 tests + 1 skip: 161 unit + 96 integration + 1 superseded wiring smoke
 dotnet test --filter "FullyQualifiedName~UnitTests"          # unit only — no Docker required
 dotnet test --filter "FullyQualifiedName~IntegrationTests"   # needs Docker running
+dotnet test --filter "FullyQualifiedName~Diagnostics"        # Phase 4 trace/metrics/redaction subset
 ```
 
 Unit tests cover the domain aggregate, state machine, validators, handlers,
@@ -628,20 +804,19 @@ is the most important.
 
 Phases planned in [`.claude/plans/payment-platform.plan.md` §13](.claude/plans/payment-platform.plan.md):
 
-- **Phase 4** — OpenTelemetry across API + worker (OTLP exporter + activity
-  propagation through the outbox + message envelope), `/metrics`, log
-  redaction enricher, real authorization processor that replaces the
-  psql-driven `Pending → Authorized` stand-in.
 - **Phase 5** — React + Vite dashboard with list view, status filter, cursor
   pagination, detail view with event timeline.
-- **Phase 6** — Polish, scripted demo, finalized docs.
+- **Phase 6** — Polish, scripted demo, finalized docs, real authorization
+  processor that replaces the psql-driven `Pending → Authorized` stand-in.
 
-Phase 3 (the async settlement worker) is shipped — see
-[Phase 3 walkthrough](#phase-3-walkthrough) for the live acceptance
-script and [`docs/adr/0008-async-settlement-architecture.md`](docs/adr/) for
-the design rationale (outbox-write-then-publish ordering, FOR UPDATE row
-lock for concurrent-delivery serialization, `Ignore<>` + DLQ for permanent
-failures).
+Phase 3 (the async settlement worker) and Phase 4 (observability) are
+shipped — see the [Phase 3 walkthrough](#phase-3-walkthrough) and
+[Phase 4 observability walkthrough](#phase-4--observability-walkthrough)
+for live acceptance scripts. Design rationale for the async settlement
+spine lives in [`docs/adr/0008-async-settlement-architecture.md`](docs/adr/)
+(outbox-write-then-publish ordering, FOR UPDATE row lock for
+concurrent-delivery serialization, `Ignore<>` + DLQ for permanent
+failures); the observability decisions live in ADRs 0011/0012/0013.
 
 ---
 

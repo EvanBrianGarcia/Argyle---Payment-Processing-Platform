@@ -81,6 +81,27 @@ services:
     ports:
       - "${WORKER_METRICS_HOST_PORT:-9090}:9090"
 
+  # Phase 4 — uncomment to spin up a local Prometheus that scrapes both
+  # API and Worker /metrics targets. Reads `ops/prometheus.example.yml`,
+  # so edit that file rather than inlining scrape configs here. The UI is
+  # at http://localhost:9091; both `payments-api` and `payments-worker`
+  # jobs should show UP within ~15s of `docker compose up -d prometheus`.
+  # prometheus:
+  #   image: prom/prometheus:v3.0.1
+  #   container_name: payments-prometheus
+  #   command:
+  #     - --config.file=/etc/prometheus/prometheus.yml
+  #     - --storage.tsdb.path=/prometheus
+  #   volumes:
+  #     - ./ops/prometheus.example.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus-data:/prometheus
+  #   ports:
+  #     - "${PROMETHEUS_HOST_PORT:-9091}:9090"
+  #   depends_on:
+  #     - api
+  #     - worker
+
 volumes:
   postgres-data:
   rabbitmq-data:
+  # prometheus-data:

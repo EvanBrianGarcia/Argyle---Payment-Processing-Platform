@@ -1,0 +1,39 @@
+# Example Prometheus scrape config for the Argyle Payment Platform stack.
+#
+# Phase 4 ships both processes (API + Worker) with a `/metrics` endpoint in
+# prometheus exposition format. The API serves on port 8080 inside the
+# `payments-api` container; the Worker exposes a dedicated metrics-only
+# Kestrel listener on port 9090 inside `payments-worker` (see ADR-0012 for
+# the prometheus-net vs OTel-Prometheus rationale and the dedicated-port
+# decision).
+#
+# To activate scraping locally:
+#   1. Uncomment the `prometheus` service block in `docker-compose.yml`.
+#   2. `docker compose up -d prometheus` (the API + Worker must be up first).
+#   3. Visit http://localhost:9091 — both API and Worker targets should be UP.
+#
+# In production, replace this with the deployment's existing Prometheus /
+# Grafana Mimir / VictoriaMetrics scrape config; the job/target shape here
+# is what the operator should copy in.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    deployment: argyle-payment-platform
+    environment: local
+
+scrape_configs:
+  - job_name: payments-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:8080']
+        labels:
+          service: payment-platform-api
+
+  - job_name: payments-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['worker:9090']
+        labels:
+          service: payment-platform-worker
