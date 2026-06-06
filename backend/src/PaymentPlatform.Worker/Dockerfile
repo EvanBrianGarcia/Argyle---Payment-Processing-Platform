@@ -20,11 +20,14 @@ RUN dotnet publish src/PaymentPlatform.Worker/PaymentPlatform.Worker.csproj \
     --no-restore \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
 ENV DOTNET_RUNNING_IN_CONTAINER=true \
     DOTNET_USE_POLLING_FILE_WATCHER=false
+
+# Worker only listens on its metrics port; nothing else binds Kestrel.
+EXPOSE 9090
 
 COPY --from=build /app/publish .
 

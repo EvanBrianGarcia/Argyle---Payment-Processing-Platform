@@ -8,6 +8,7 @@ using PaymentPlatform.Infrastructure.Persistence;
 using PaymentPlatform.Infrastructure.Processing;
 using PaymentPlatform.Messaging.Settlement;
 using PaymentPlatform.Worker.Consumers;
+using Prometheus;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -18,11 +19,27 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
-    var builder = Host.CreateApplicationBuilder(args);
+    // Phase 4 Task 4 — the Worker is still a consumer-first process, but it
+    // also exposes a tiny `/metrics` HTTP listener so Prometheus can scrape
+    // queue metrics without going through the API. WebApplication.CreateBuilder
+    // is fewer lines than running a second IHost and matches the master plan's
+    // "lean" recommendation.
+    var builder = WebApplication.CreateBuilder(args);
 
-    builder.Services.AddSerilog((_, cfg) => cfg
+    builder.Host.UseSerilog((_, _, cfg) => cfg
         .Enrich.FromLogContext()
         .WriteTo.Console(new CompactJsonFormatter()));
+
+    // Restrict Kestrel to the metrics port only — the worker is not a public
+    // API surface and should never serve anything else. Default 9090 matches
+    // the docker-compose port mapping; tests pass 0 to get an ephemeral port.
+    var metricsPort = builder.Configuration.GetValue<int?>("Worker:MetricsPort") ?? 9090;
+    if (metricsPort is < 1 or > 65535)
+    {
+        throw new InvalidOperationException(
+            $"Worker:MetricsPort must be between 1 and 65535; got {metricsPort}.");
+    }
+    builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(metricsPort));
 
     var connectionString = builder.Configuration.GetConnectionString("Payments")
         ?? throw new InvalidOperationException("ConnectionStrings:Payments is not configured.");
@@ -78,8 +95,13 @@ try
         });
     });
 
-    var host = builder.Build();
-    host.Run();
+    var app = builder.Build();
+
+    // Only `/metrics`. The worker is not an HTTP service; anything else on
+    // this listener is a misuse and should 404.
+    app.MapMetrics("/metrics");
+
+    app.Run();
 }
 catch (Exception ex) when (ex is not HostAbortedException)
 {

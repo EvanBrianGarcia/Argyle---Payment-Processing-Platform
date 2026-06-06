@@ -72,11 +72,14 @@ services:
       # AlwaysFailPermanent to exercise the retry / DLQ paths from a live
       # capture — see the README's Phase 3 failure-mode block.
       Worker__StubProcessor__Mode: AlwaysSucceed
+      Worker__MetricsPort: "9090"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    ports:
+      - "${WORKER_METRICS_HOST_PORT:-9090}:9090"
 
 volumes:
   postgres-data:

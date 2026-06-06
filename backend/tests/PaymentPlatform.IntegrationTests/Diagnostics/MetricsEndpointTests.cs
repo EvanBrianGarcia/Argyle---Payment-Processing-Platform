@@ -209,6 +209,62 @@ public sealed class MetricsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetMetrics_OnWorkerDedicatedPort_ReturnsPrometheusExposition()
+    {
+        var fastRetry = new WorkerRetryOptions
+        {
+            RetryLimit = 5,
+            BaseIntervalMs = 50,
+            MaxIntervalMs = 200,
+            IncrementMs = 50,
+        };
+        await using var worker = await SettlementWorkerHost.StartAsync(_fixture, fastRetry);
+
+        using var workerClient = new HttpClient { BaseAddress = new Uri($"http://localhost:{worker.MetricsPort}") };
+        var response = await workerClient.GetAsync("/metrics");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("text/plain",
+            "the worker exposes the prometheus text exposition format on its dedicated port");
+
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("# TYPE",
+            "the worker's /metrics body should look like prometheus output, not an empty 200");
+    }
+
+    [Fact]
+    public async Task GetMetrics_OnWorkerDedicatedPort_AfterSettlement_ExposesConsumedCounter()
+    {
+        var fastRetry = new WorkerRetryOptions
+        {
+            RetryLimit = 5,
+            BaseIntervalMs = 50,
+            MaxIntervalMs = 200,
+            IncrementMs = 50,
+        };
+        await using var worker = await SettlementWorkerHost.StartAsync(_fixture, fastRetry);
+        worker.Clock.UtcNow = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var paymentId = await CreatePaymentAsync();
+        await AuthorizeInProcessAsync(paymentId);
+        await CaptureAsync(paymentId);
+
+        await Eventually(async () =>
+        {
+            var status = await ReadStatusAsync(paymentId);
+            status.Should().Be("Settled");
+        }, TimeSpan.FromSeconds(20));
+
+        using var workerClient = new HttpClient { BaseAddress = new Uri($"http://localhost:{worker.MetricsPort}") };
+        var response = await workerClient.GetAsync("/metrics");
+        var body = await response.Content.ReadAsStringAsync();
+
+        body.Should().MatchRegex(
+            "mq_consumed_total\\{queue=\"settlement\"\\} [1-9]\\d*",
+            "the worker's own /metrics endpoint must surface mq_consumed_total — the whole point of Task 4");
+    }
+
+    [Fact]
     public async Task GetMetrics_AfterStatusGaugeUpdaterRuns_ExposesPaymentsByStatusGauge()
     {
         await SeedCapturedPaymentDirectlyAsync();
