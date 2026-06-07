@@ -9,6 +9,7 @@ COPY src/PaymentPlatform.Application/PaymentPlatform.Application.csproj src/Paym
 COPY src/PaymentPlatform.Contracts/PaymentPlatform.Contracts.csproj src/PaymentPlatform.Contracts/
 COPY src/PaymentPlatform.Domain/PaymentPlatform.Domain.csproj src/PaymentPlatform.Domain/
 COPY src/PaymentPlatform.Infrastructure/PaymentPlatform.Infrastructure.csproj src/PaymentPlatform.Infrastructure/
+COPY src/PaymentPlatform.Messaging/PaymentPlatform.Messaging.csproj src/PaymentPlatform.Messaging/
 
 RUN dotnet restore src/PaymentPlatform.Api/PaymentPlatform.Api.csproj
 
