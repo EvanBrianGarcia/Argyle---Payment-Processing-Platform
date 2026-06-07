@@ -56,6 +56,38 @@ cd frontend && pnpm install && pnpm dev
 # http://localhost:5173/payments
 ```
 
+You'll land on a list pre-populated with seeded payments at every
+status (Pending, Authorized, Captured, Settled, Failed, Refunded).
+Click a status chip to filter; click a row to see the full event
+timeline. The list polls every 5s and the detail view polls every 3s
+while a payment is in flight.
+
+### Watch a payment go through its full lifecycle
+
+With the dashboard open in one tab, run this in a new terminal:
+
+```bash
+./scripts/watch-lifecycle.sh
+```
+
+The script:
+
+1. Picks one of the two seeded `Authorized` payments and prints its
+   dashboard detail URL.
+2. Counts down 5 seconds — open the URL in your dashboard tab now.
+3. Issues `POST /v1/payments/{id}/capture`. The badge flips to
+   `Captured` within ~1s (the API writes the payment row and an
+   outbox row in the same database transaction, then returns).
+4. The outbox dispatcher polls Postgres, finds the new row, publishes
+   `SettlePayment` to RabbitMQ. The worker consumes, calls the stub
+   processor, updates the payment to `Settled`, and appends the audit
+   event. The badge flips to `Settled` ~1–3s after `Captured`.
+5. Prints the full four-event timeline once the payment lands.
+
+End-to-end in under 10 seconds. Reset with
+`docker compose down -v && ./scripts/run.sh` — the two seeded
+`Authorized` payments are consumed after one capture each.
+
 ### Run the tests
 
 ```bash
@@ -89,28 +121,6 @@ restarts (the migration plants the SHA-256 hashes).
 | Worker metrics       | `http://localhost:9090/metrics`                             |
 | RabbitMQ management  | `http://localhost:15672` (`guest` / `guest`)                |
 | Dashboard            | `http://localhost:5173/payments`                            |
-
-### Watch a payment go through its full lifecycle
-
-After the stack is up, run:
-
-```bash
-./scripts/watch-lifecycle.sh
-```
-
-The script picks one of the seeded `Authorized` payments, prints the
-dashboard detail URL, gives you 5 seconds to open it in your browser,
-then captures the payment via the API. With the detail page open
-you'll see the status badge transition `Authorized → Captured →
-Settled` in under 10 seconds — the entire async settlement pipeline
-(API writes the outbox row in the same transaction as capture →
-dispatcher publishes to RabbitMQ → worker consumes and updates state)
-playing out live in the UI. The dashboard's detail query polls every
-3s while the payment is in flight and stops polling once it reaches a
-terminal state.
-
-The two seeded `Authorized` payments are consumed after one capture
-each; reset state with `docker compose down -v && ./scripts/run.sh`.
 
 ---
 
