@@ -80,17 +80,36 @@ Phases 1–4 prioritize operational depth on a small surface, not breadth.
 - .NET 10 SDK (only required to run `dotnet test` outside Docker)
 - `curl`, `jq`, and `uuidgen` for the acceptance walkthrough
 
-### Bring the stack up
+### Fresh-clone smoke test (~2 min, end-to-end)
 
 ```bash
 git clone <this repo>
 cd "Argyle - Payment Processing Platform"
+
+docker compose up -d                 # postgres + rabbitmq + api + worker
+./scripts/demo.sh                    # exercises every endpoint, prints the audit trail
+```
+
+`demo.sh` walks readiness → create → idempotent replay → capture (when
+applicable) → refund (when applicable) → list → detail with event timeline
+→ cross-tenant 404, asserting status codes at every step and exiting
+non-zero on any surprise. End-of-run banner: `✓ All steps green`.
+
+For the frontend dashboard:
+
+```bash
+cd frontend && pnpm install && pnpm dev    # http://localhost:5173/payments
+```
+
+### Bring the stack up (manual)
+
+```bash
 docker compose up -d
 docker compose ps                    # postgres + rabbitmq + api + worker — all four healthy
 docker compose logs -f api worker    # first boot runs EF Core Migrate and seeds merchants
 ```
 
-The API listens on `http://localhost:5000` (mapped from the container's
+The API listens on `http://localhost:8080` (mapped from the container's
 `:8080`). Postgres listens on `localhost:5432`. RabbitMQ's AMQP port is
 `5672` and the management UI is on `http://localhost:15672` (login
 `guest` / `guest`). The API container runs migrations in `Development`
@@ -113,7 +132,7 @@ against the live stack:
 
 ```bash
 # 1. Create a payment as merchant "acme"
-RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -122,17 +141,17 @@ echo "$RESP" | jq .
 PAYMENT_ID=$(echo "$RESP" | jq -r .id)
 
 # 2. Fetch it back
-curl -s http://localhost:5000/v1/payments/$PAYMENT_ID \
+curl -s http://localhost:8080/v1/payments/$PAYMENT_ID \
   -H "Authorization: Bearer dev-key-mrc-acme" | jq .
 
 # 3. Idempotent replay — same key + same body → byte-identical response, no second DB row
 KEY=$(uuidgen)
-RESP1=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP1=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $KEY" \
   -H "Content-Type: application/json" \
   -d '{"amount_minor":5000,"currency":"USD","card_token":"tok_stub_visa"}')
-RESP2=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP2=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $KEY" \
   -H "Content-Type: application/json" \
@@ -140,14 +159,14 @@ RESP2=$(curl -s -X POST http://localhost:5000/v1/payments \
 diff <(echo "$RESP1") <(echo "$RESP2")     # no output → bodies match
 
 # 4. Cross-merchant isolation — should be 404, never 403, never the payment body
-curl -i http://localhost:5000/v1/payments/$PAYMENT_ID \
+curl -i http://localhost:8080/v1/payments/$PAYMENT_ID \
   -H "Authorization: Bearer dev-key-mrc-pied"
 
 # 5. No auth — 401 with error envelope
-curl -i http://localhost:5000/v1/payments/$PAYMENT_ID
+curl -i http://localhost:8080/v1/payments/$PAYMENT_ID
 
 # 6. Liveness
-curl http://localhost:5000/health/live
+curl http://localhost:8080/health/live
 
 # 7. Tests
 cd backend && dotnet test
@@ -177,7 +196,7 @@ the future authorization worker will use; Phase 3's worker handles the
 
 ```bash
 # Seed a Pending payment
-RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -192,14 +211,14 @@ docker compose exec postgres psql -U postgres payments -c \
            '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
 
 # Capture (Authorized → Captured)
-curl -s -X POST http://localhost:5000/v1/payments/$PID/capture \
+curl -s -X POST http://localhost:8080/v1/payments/$PID/capture \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" -d '{}' | jq .
 # → 200, status: "Captured", events array has 3 entries
 
 # Refund (Captured → Refunded)
-curl -s -X POST http://localhost:5000/v1/payments/$PID/refund \
+curl -s -X POST http://localhost:8080/v1/payments/$PID/refund \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -207,13 +226,13 @@ curl -s -X POST http://localhost:5000/v1/payments/$PID/refund \
 # → 200, status: "Refunded", events array has 4 entries
 
 # Attempting to capture a Captured payment → 409 invalid_state_transition
-curl -i -X POST http://localhost:5000/v1/payments/$PID/capture \
+curl -i -X POST http://localhost:8080/v1/payments/$PID/capture \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" -d '{}'
 
 # List with status filter and cursor pagination
-curl -s "http://localhost:5000/v1/payments?status=Refunded&limit=10" \
+curl -s "http://localhost:8080/v1/payments?status=Refunded&limit=10" \
   -H "Authorization: Bearer dev-key-mrc-acme" | jq .
 # → { data: [...], next_cursor: null }
 ```
@@ -266,7 +285,7 @@ it via MassTransit, and `PaymentPlatform.Worker` consumes it under a
 
 ```bash
 # Seed a Pending payment and drive it to Authorized as in the Phase 2 walk
-RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -280,7 +299,7 @@ docker compose exec postgres psql -U postgres payments -c \
            '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
 
 # Capture — the API commits the outbox row in the same transaction
-curl -s -X POST http://localhost:5000/v1/payments/$PID/capture \
+curl -s -X POST http://localhost:8080/v1/payments/$PID/capture \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" -d '{}' | jq .status
@@ -292,7 +311,7 @@ docker compose exec postgres psql -U postgres payments -c \
 
 # Wait ~3s for the dispatcher to publish and the worker to settle
 sleep 3
-curl -s http://localhost:5000/v1/payments/$PID \
+curl -s http://localhost:8080/v1/payments/$PID \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   | jq '{status, events: [.events[] | {from_status, to_status, actor, reason}]}'
 # → status: "Settled"
@@ -306,14 +325,14 @@ docker compose exec postgres psql -U postgres payments -c \
 ### Readiness probe — `/health/ready`
 
 ```bash
-curl -s http://localhost:5000/health/ready | jq .
+curl -s http://localhost:8080/health/ready | jq .
 # → { status: "healthy", checks: [{ name: "postgres", healthy: true },
 #                                 { name: "rabbitmq",  healthy: true }] }
 
 docker compose stop rabbitmq
-curl -i http://localhost:5000/health/ready          # → 503, rabbitmq healthy: false
+curl -i http://localhost:8080/health/ready          # → 503, rabbitmq healthy: false
 docker compose start rabbitmq && sleep 5
-curl -i http://localhost:5000/health/ready          # → 200 again
+curl -i http://localhost:8080/health/ready          # → 200 again
 ```
 
 `/health/live` (Phase 1) is unchanged — it only proves the API process is up.
@@ -355,7 +374,7 @@ docker compose exec rabbitmq rabbitmqctl list_queues name messages
 #  settlement          0
 #  settlement_error    1
 
-curl -s http://localhost:5000/v1/payments/$NEW_PID \
+curl -s http://localhost:8080/v1/payments/$NEW_PID \
   -H "Authorization: Bearer dev-key-mrc-acme" | jq .status
 # → "Captured" — no Settled event row, the payment_outbox row is still dispatched
 ```
@@ -392,8 +411,8 @@ later — only `OpenTelemetry:Otlp:Endpoint` needs to be set.
 ### Scrape metrics
 
 ```bash
-# RED + business counters from the API (port 8080 in container, 5000 on host)
-curl -s http://localhost:5000/metrics | grep -E "^(http_requests_received|payments_)"
+# RED + business counters from the API (port 8080 in container and on the host)
+curl -s http://localhost:8080/metrics | grep -E "^(http_requests_received|payments_)"
 
 # Queue + processing-duration counters from the Worker (dedicated port 9090)
 curl -s http://localhost:9090/metrics | grep -E "^mq_"
@@ -458,7 +477,7 @@ Every response now carries a `traceparent` header in W3C format —
 same trace context without parsing log lines:
 
 ```bash
-curl -i -X POST http://localhost:5000/v1/payments \
+curl -i -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -473,7 +492,7 @@ adopts that trace id as the parent — verified by
 ### Walk one payment across both processes
 
 ```bash
-RESP=$(curl -s -X POST http://localhost:5000/v1/payments \
+RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" \
@@ -484,7 +503,7 @@ docker compose exec postgres psql -U postgres payments -c \
   "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';"
 
 # Capture and grab the traceparent that comes back on the response
-TRACEPARENT=$(curl -s -D - -X POST http://localhost:5000/v1/payments/$PID/capture \
+TRACEPARENT=$(curl -s -D - -X POST http://localhost:8080/v1/payments/$PID/capture \
   -H "Authorization: Bearer dev-key-mrc-acme" \
   -H "Idempotency-Key: $(uuidgen)" \
   -H "Content-Type: application/json" -d '{}' -o /dev/null \
@@ -839,7 +858,7 @@ failures); the observability decisions live in ADRs 0011/0012/0013.
 | Symptom                                                                                                  | Cause / fix                                                                                                                                                                                                                                |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `docker compose up` fails with `port is already allocated` on `5432`                                    | A local Postgres (Homebrew, Postgres.app, another macOS Postgres install) owns the host port. Override the host-side mapping for one boot: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects to Postgres through the internal Docker network, so it is unaffected. Integration tests are also unaffected — Testcontainers always uses a random port. |
-| `Bind for 0.0.0.0:5000 failed: port is already allocated`                                                | On macOS, this is almost always the AirPlay Receiver (System Settings → General → AirDrop & Handoff → AirPlay Receiver: off) or another local server. Override the host-side mapping: `API_HOST_PORT=5050 docker compose up -d` (then use `http://localhost:5050` for the walkthrough). |
+| `Bind for 0.0.0.0:8080 failed: port is already allocated`                                                | Something else owns host port 8080. Override the host-side mapping: `API_HOST_PORT=5050 docker compose up -d` (then use `http://localhost:5050` for the walkthrough). |
 | `Cannot connect to the Docker daemon`                                                                    | Docker Desktop isn't running. Open it; wait for the whale icon to stop animating; retry. Integration tests need this too.                                                                                                              |
 | `dotnet test` integration tests fail with `28P01 password authentication failed for user "postgres"`     | A stray host Postgres is listening on `localhost:5432` and the API host config is falling through to it. Stop the host Postgres, or run only the unit tests (`--filter "FullyQualifiedName~UnitTests"`).                                |
 | Integration tests fail with `Testcontainers ... failed to pull image`                                    | Docker is up but can't reach Docker Hub. Pre-pull manually: `docker pull postgres:16-alpine`.                                                                                                                                            |
