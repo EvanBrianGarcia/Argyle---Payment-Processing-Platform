@@ -1,19 +1,33 @@
 # Argyle — Payment Processing Platform
 
 A simplified payment processing platform built for the Argyle senior engineer
-take-home. This repository contains **Phases 1, 2, 3, and 4**: the vertical
+take-home. This repository contains **Phases 1, 2, 3, 4, and 5**: the vertical
 slice that proves the spine works end-to-end (Phase 1), the full payment
 state machine with capture, refund, list, and per-transition audit events
 (Phase 2), the async settlement worker — transactional outbox,
 RabbitMQ-backed publish, idempotent consumer, retry policy + DLQ, RabbitMQ
-readiness probe (Phase 3), and the observability wiring — OpenTelemetry
-trace propagation across the API → MQ → Worker boundary, Prometheus
-metrics on dedicated endpoints, response `traceparent` header, and a
-property-deny-list log redaction enricher (Phase 4). The React dashboard
-lands in Phase 5 (see [What's next](#whats-next)).
+readiness probe (Phase 3), the observability wiring — OpenTelemetry trace
+propagation across the API → MQ → Worker boundary, Prometheus metrics on
+dedicated endpoints, response `traceparent` header, and a property-deny-list
+log redaction enricher (Phase 4), and the payments operations dashboard —
+a Vite + React + TanStack Query frontend talking to the live API over a
+generated OpenAPI client (Phase 5).
 
 The exercise brief lives at [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 The implementation plan lives under [`.claude/plans/`](.claude/plans).
+
+---
+
+## The dashboard
+
+![Payments operations dashboard](docs/dashboard-screenshot.png)
+
+The Phase 5 dashboard is a single-page Vite + React app under
+[`frontend/`](frontend). It follows a Swiss / data-dense visual direction
+([ADR-0015](docs/adr/0015-visual-direction-swiss-data-dense.md)) — no
+shadcn, no Tailwind, no UI kit — and renders the same OpenAPI surface the
+backend exposes via a typed TanStack Query client. See
+[`frontend/README.md`](frontend/README.md) for run instructions.
 
 ---
 
