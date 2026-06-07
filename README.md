@@ -90,6 +90,28 @@ restarts (the migration plants the SHA-256 hashes).
 | RabbitMQ management  | `http://localhost:15672` (`guest` / `guest`)                |
 | Dashboard            | `http://localhost:5173/payments`                            |
 
+### Watch a payment go through its full lifecycle
+
+After the stack is up, run:
+
+```bash
+./scripts/watch-lifecycle.sh
+```
+
+The script picks one of the seeded `Authorized` payments, prints the
+dashboard detail URL, gives you 5 seconds to open it in your browser,
+then captures the payment via the API. With the detail page open
+you'll see the status badge transition `Authorized → Captured →
+Settled` in under 10 seconds — the entire async settlement pipeline
+(API writes the outbox row in the same transaction as capture →
+dispatcher publishes to RabbitMQ → worker consumes and updates state)
+playing out live in the UI. The dashboard's detail query polls every
+3s while the payment is in flight and stops polling once it reaches a
+terminal state.
+
+The two seeded `Authorized` payments are consumed after one capture
+each; reset state with `docker compose down -v && ./scripts/run.sh`.
+
 ---
 
 ## 2. Architectural overview
