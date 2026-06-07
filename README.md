@@ -326,20 +326,6 @@ first item is the most important.
 
 ---
 
-## Troubleshooting
-
-| Symptom                                                              | What it usually means / what to do                                                                                                                            |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker compose up` fails on `5433` (`port is already allocated`)    | Something else owns it. Override: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects via the internal Docker network, so it's unaffected.       |
-| `docker compose up` fails on `8080`                                  | Same idea: `API_HOST_PORT=5050 docker compose up -d`.                                                                                                          |
-| Cannot connect to the Docker daemon                                  | Docker Desktop isn't running. Open it, wait for the whale icon to settle, retry.                                                                              |
-| Integration tests fail with `Testcontainers ... failed to pull image` | Docker is up but can't reach Docker Hub. Pre-pull: `docker pull postgres:16-alpine && docker pull rabbitmq:3-management-alpine`.                              |
-| `401 Bearer token is not recognized` with a clearly-correct key      | Stale Postgres volume from an earlier run is missing the seed data. `docker compose down -v` then `docker compose up -d` re-seeds.                            |
-| Logs aren't single-line JSON                                         | You're looking at the .NET host bootstrap output. The Serilog pipeline starts after `WebApplication.CreateBuilder`. Once you see `Now listening on`, it's on. |
-| The dashboard shows `NaN.NaN` for every amount                       | The frontend lost its snake/camel transform. See [ADR-0017](docs/adr/0017-api-client-case-translation.md).                                                    |
-
----
-
 ## Further reading
 
 - 17 architecture decision records under [`docs/adr/`](docs/adr/).
