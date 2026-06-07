@@ -147,49 +147,116 @@ payment processor, updates the payment, and records what happened. The
 dashboard reads the API to show operators the current state and the full
 history of every payment.
 
-### The picture as a diagram
+### Components
+
+What talks to what. Subgraphs group the synchronous request path,
+the async settlement pipeline, and the shared data + observability
+edges.
 
 ```mermaid
-flowchart LR
-    Merchant([Merchant<br/>backend])
+flowchart TB
+    Merchant([Merchant backend])
     Operator([Operator])
-    Dashboard["Dashboard<br/>Vite + React<br/>TanStack Query"]
-    API["API<br/>ASP.NET Core 10<br/>Minimal APIs + MediatR<br/>:8080"]
-    Dispatcher["Outbox Dispatcher<br/>BackgroundService<br/>polls every 2s"]
-    RabbitMQ[["RabbitMQ<br/>quorum queue + DLQ<br/>:5672"]]
-    Worker["Worker<br/>.NET Generic Host<br/>MassTransit consumer<br/>:9090 metrics"]
-    Processor[/"Stub Payment Processor<br/>IPaymentProcessor"/]
-    Postgres[("Postgres 16<br/>payments, payment_events,<br/>idempotency_keys,<br/>payment_outbox")]
-    Otel["OTel Collector<br/>traces + metrics + logs<br/>(prod swap)"]
 
-    Merchant -- "HTTPS<br/>Idempotency-Key" --> API
-    Operator -- "browser" --> Dashboard
-    Dashboard -- "typed client<br/>openapi-typescript" --> API
+    subgraph Sync ["Synchronous request path"]
+        Dashboard["Dashboard<br/>Vite + React"]
+        API["API<br/>ASP.NET Core 10"]
+    end
 
-    API -- "EF Core<br/>state + outbox<br/>in one transaction" --> Postgres
-    Dispatcher -. "reads unsent rows" .-> Postgres
-    API ==> Dispatcher
-    Dispatcher -- "publish<br/>+ traceparent" --> RabbitMQ
-    RabbitMQ -- "consume<br/>+ trace context" --> Worker
-    Worker -- "settle / fail" --> Processor
-    Worker -- "SELECT ... FOR UPDATE<br/>state + audit event" --> Postgres
+    subgraph Async ["Async settlement pipeline"]
+        Dispatcher["Outbox Dispatcher<br/>(in API process)"]
+        RabbitMQ[["RabbitMQ"]]
+        Worker["Worker<br/>MassTransit consumer"]
+        Processor[/"Stub Payment Processor"/]
+    end
 
-    API -.->|"/metrics<br/>RED + business"| Otel
-    Worker -.->|"/metrics<br/>queue + processing"| Otel
+    Postgres[("Postgres 16")]
+    Otel["OTel Collector<br/>(prod swap)"]
 
-    classDef edge fill:#fff,stroke:#888,stroke-dasharray: 3 3
-    classDef store fill:#fdf6e3,stroke:#b58900
-    classDef async fill:#eef7ff,stroke:#268bd2
-    classDef ext fill:#f7eaff,stroke:#6c71c4
-    class Postgres store
-    class RabbitMQ,Dispatcher,Worker async
-    class Otel,Processor ext
+    Merchant -->|HTTPS| API
+    Operator --> Dashboard
+    Dashboard -->|typed OpenAPI client| API
+
+    API -->|state + outbox<br/>same transaction| Postgres
+    API --> Dispatcher
+    Dispatcher -.->|poll| Postgres
+    Dispatcher -->|publish| RabbitMQ
+    RabbitMQ -->|consume| Worker
+    Worker --> Processor
+    Worker -->|state + audit| Postgres
+
+    API -.->|metrics + traces| Otel
+    Worker -.->|metrics + traces| Otel
 ```
 
-Solid arrows are the synchronous request path. The thick `API ==> Dispatcher`
-edge is the in-process hand-off from the request handler (which wrote the
-outbox row) to the polling dispatcher (which will publish it). Dotted arrows
-are observability and out-of-band reads.
+### The settlement flow as a sequence
+
+This is what makes the platform's design interesting — and it's the
+part a static box diagram can't show well. When a merchant captures
+a payment, two state changes (the payment row and the outbox message)
+land in **one database transaction**, so neither can exist without
+the other. The dispatcher publishes the outbox row asynchronously,
+the worker consumes it, and the trace context rides the whole way
+across the queue boundary.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Merchant
+    participant A as API
+    participant DB as Postgres
+    participant D as Outbox Dispatcher
+    participant MQ as RabbitMQ
+    participant W as Worker
+    participant P as Stub Processor
+
+    M->>A: POST /v1/payments/{id}/capture<br/>Idempotency-Key
+    activate A
+    A->>DB: BEGIN
+    A->>DB: UPDATE payment → Captured (version++)
+    A->>DB: INSERT payment_events (Authorized→Captured)
+    A->>DB: INSERT payment_outbox (SettlePayment + traceparent)
+    A->>DB: COMMIT
+    A-->>M: 200 OK {status: Captured}
+    deactivate A
+
+    Note over D,DB: Dispatcher polls every 2s
+    D->>DB: SELECT outbox WHERE dispatched_at IS NULL
+    D->>MQ: publish SettlePayment (+ traceparent)
+    D->>DB: UPDATE outbox SET dispatched_at = now()
+
+    MQ->>W: deliver SettlePayment
+    activate W
+    Note over W,DB: same trace_id as the original HTTP request
+    W->>DB: SELECT payment FOR UPDATE
+    W->>P: SettleAsync(payment)
+    P-->>W: Success(externalReference)
+    W->>DB: UPDATE payment → Settled<br/>+ INSERT payment_events
+    W-->>MQ: ack
+    deactivate W
+```
+
+A few things worth calling out:
+
+- **The outbox close-out (steps 4–6) is one transaction.** If the
+  commit fails, no payment row changes *and* no message gets
+  published. If RabbitMQ is down when the dispatcher runs, the row
+  stays unsent and the next poll picks it up — no data is ever lost
+  to a publish failure.
+- **`SELECT FOR UPDATE` (step 11) serializes concurrent deliveries**
+  of the same `SettlePayment` message (whether from MassTransit retry
+  or RabbitMQ redelivery). The consumer is therefore safe to be
+  invoked more than once for the same payment.
+- **Trace context propagates through the queue envelope** (the
+  `traceparent` written in step 4 and read in step 9). Open the
+  worker's processing span in your trace UI and you can walk back up
+  to the original HTTP request span.
+- **Permanent failures dead-letter, transient failures retry.** Not
+  shown above for clarity — MassTransit's retry policy handles
+  transient failures with exponential backoff; the
+  `PermanentSettlementFailureException` is in the `Ignore<>` list and
+  goes straight to `settlement_error`, leaving the payment in
+  `Captured` for an operator to inspect.
 
 ### The pieces
 
