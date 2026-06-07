@@ -139,7 +139,7 @@ flowchart TB
     Browser --> API
     MerchantAPI --> API
     API <--> PG
-    PG --> Outbox
+    Outbox -.->|polls| PG
     Outbox --> MQ
     MQ --> Worker
     Worker --> Stub
