@@ -1,35 +1,74 @@
 {
-  "openapi": "3.0.1",
+  "openapi": "3.1.1",
   "info": {
-    "title": "PaymentPlatform.Api",
-    "version": "v1"
+    "title": "PaymentPlatform.Api | v1",
+    "version": "1.0.0"
   },
   "servers": [
-    { "url": "http://localhost:8080" }
+    {
+      "url": "http://localhost:8080/"
+    }
   ],
   "paths": {
+    "/health/live": {
+      "get": {
+        "tags": [
+          "PaymentPlatform.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "PaymentPlatform.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/v1/payments": {
       "post": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Create a payment",
+        "description": "Creates a new payment in Pending state. Requires an Idempotency-Key header.",
         "operationId": "createPayment",
         "parameters": [
-          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreatePaymentRequest" }
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string"
             }
           }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
             "description": "Created",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
               }
             }
           },
@@ -37,7 +76,9 @@
             "description": "Bad Request",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
@@ -45,27 +86,77 @@
             "description": "Unauthorized",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
         }
       },
       "get": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "List payments",
+        "description": "Cursor-paginated list of payments scoped to the calling merchant. Optional status filter.",
         "operationId": "listPayments",
         "parameters": [
-          { "name": "status", "in": "query", "schema": { "type": "string" } },
-          { "name": "cursor", "in": "query", "schema": { "type": "string" } },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "OK",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PaymentListResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
@@ -74,18 +165,30 @@
     },
     "/v1/payments/{id}": {
       "get": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Get a payment by id",
+        "description": "Returns the payment and its full event timeline.",
         "operationId": "getPayment",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "OK",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
               }
             }
           },
@@ -93,7 +196,19 @@
             "description": "Not Found",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
@@ -102,17 +217,42 @@
     },
     "/v1/payments/{id}/capture": {
       "post": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Capture a payment",
+        "description": "Transitions an Authorized payment to Captured. Settlement runs asynchronously.",
         "operationId": "capturePayment",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CapturePaymentRequest" }
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CapturePaymentRequest"
+                  }
+                ]
+              }
             }
           }
         },
@@ -121,7 +261,29 @@
             "description": "OK",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
@@ -129,7 +291,9 @@
             "description": "Conflict",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
@@ -138,17 +302,42 @@
     },
     "/v1/payments/{id}/refund": {
       "post": {
-        "tags": ["Payments"],
+        "tags": [
+          "Payments"
+        ],
         "summary": "Refund a payment",
+        "description": "Refunds a Settled or Captured payment.",
         "operationId": "refundPayment",
         "parameters": [
-          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "Idempotency-Key", "in": "header", "schema": { "type": "string" } }
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/RefundPaymentRequest" }
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RefundPaymentRequest"
+                  }
+                ]
+              }
             }
           }
         },
@@ -157,7 +346,29 @@
             "description": "OK",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PaymentResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           },
@@ -165,7 +376,9 @@
             "description": "Conflict",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
@@ -175,104 +388,247 @@
   },
   "components": {
     "schemas": {
-      "PaymentStatus": {
-        "type": "string",
-        "enum": ["Pending", "Authorized", "Captured", "Settled", "Failed", "Refunded"]
-      },
-      "PaymentEventDto": {
+      "CapturePaymentRequest": {
+        "required": [
+          "amount_minor"
+        ],
         "type": "object",
-        "required": ["id", "toStatus", "actor", "reason", "payload", "at"],
         "properties": {
-          "id": { "type": "string" },
-          "fromStatus": { "type": "string", "nullable": true },
-          "toStatus": { "type": "string" },
-          "actor": { "type": "string" },
-          "reason": { "type": "string" },
-          "payload": {
-            "type": "object",
-            "additionalProperties": { "type": "string" }
-          },
-          "at": { "type": "string", "format": "date-time" }
+          "amount_minor": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
         }
       },
-      "PaymentResponse": {
+      "CreatePaymentRequest": {
+        "required": [
+          "amount_minor",
+          "currency",
+          "card_token",
+          "customer_reference",
+          "metadata"
+        ],
         "type": "object",
-        "required": ["id", "amountMinor", "currency", "status", "metadata", "createdAt", "updatedAt", "events"],
         "properties": {
-          "id": { "type": "string" },
-          "amountMinor": { "type": "integer", "format": "int64" },
-          "currency": { "type": "string" },
-          "status": { "$ref": "#/components/schemas/PaymentStatus" },
-          "customerReference": { "type": "string", "nullable": true },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": { "type": "string" }
+          "amount_minor": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
           },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" },
-          "events": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/PaymentEventDto" }
+          "currency": {
+            "type": "string"
+          },
+          "card_token": {
+            "type": "string"
+          },
+          "customer_reference": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "metadata": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ErrorBody": {
+        "required": [
+          "code",
+          "message",
+          "details",
+          "trace_id",
+          "request_id"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": { },
+          "trace_id": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "request_id": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "required": [
+          "error"
+        ],
+        "type": "object",
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "PaymentEventDto": {
+        "required": [
+          "id",
+          "from_status",
+          "to_status",
+          "actor",
+          "reason",
+          "payload",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "from_status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "to_status": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
       "PaymentListResponse": {
+        "required": [
+          "data",
+          "next_cursor"
+        ],
         "type": "object",
-        "required": ["data"],
         "properties": {
           "data": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/PaymentResponse" }
+            "items": {
+              "$ref": "#/components/schemas/PaymentResponse"
+            }
           },
-          "nextCursor": { "type": "string", "nullable": true }
-        }
-      },
-      "CreatePaymentRequest": {
-        "type": "object",
-        "required": ["amountMinor", "currency", "cardToken"],
-        "properties": {
-          "amountMinor": { "type": "integer", "format": "int64" },
-          "currency": { "type": "string" },
-          "cardToken": { "type": "string" },
-          "customerReference": { "type": "string", "nullable": true },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": { "type": "string" },
-            "nullable": true
+          "next_cursor": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
-      "CapturePaymentRequest": {
+      "PaymentResponse": {
+        "required": [
+          "id",
+          "amount_minor",
+          "currency",
+          "status",
+          "customer_reference",
+          "metadata",
+          "created_at",
+          "updated_at",
+          "events"
+        ],
         "type": "object",
         "properties": {
-          "amountMinor": { "type": "integer", "format": "int64", "nullable": true }
+          "id": {
+            "type": "string"
+          },
+          "amount_minor": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "customer_reference": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentEventDto"
+            }
+          }
         }
       },
       "RefundPaymentRequest": {
+        "required": [
+          "reason"
+        ],
         "type": "object",
-        "required": ["reason"],
         "properties": {
-          "reason": { "type": "string" }
-        }
-      },
-      "ErrorBody": {
-        "type": "object",
-        "required": ["code", "message"],
-        "properties": {
-          "code": { "type": "string" },
-          "message": { "type": "string" },
-          "details": { "nullable": true },
-          "traceId": { "type": "string", "nullable": true },
-          "requestId": { "type": "string", "nullable": true }
-        }
-      },
-      "ErrorEnvelope": {
-        "type": "object",
-        "required": ["error"],
-        "properties": {
-          "error": { "$ref": "#/components/schemas/ErrorBody" }
+          "reason": {
+            "type": "string"
+          }
         }
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "name": "PaymentPlatform.Api"
+    },
+    {
+      "name": "Payments"
+    }
+  ]
 }

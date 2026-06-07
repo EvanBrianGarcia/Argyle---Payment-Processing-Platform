@@ -4,6 +4,72 @@
  */
 
 export interface paths {
+    "/health/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/payments": {
         parameters: {
             query?: never;
@@ -11,10 +77,16 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List payments */
+        /**
+         * List payments
+         * @description Cursor-paginated list of payments scoped to the calling merchant. Optional status filter.
+         */
         get: operations["listPayments"];
         put?: never;
-        /** Create a payment */
+        /**
+         * Create a payment
+         * @description Creates a new payment in Pending state. Requires an Idempotency-Key header.
+         */
         post: operations["createPayment"];
         delete?: never;
         options?: never;
@@ -29,7 +101,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a payment by id */
+        /**
+         * Get a payment by id
+         * @description Returns the payment and its full event timeline.
+         */
         get: operations["getPayment"];
         put?: never;
         post?: never;
@@ -48,7 +123,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Capture a payment */
+        /**
+         * Capture a payment
+         * @description Transitions an Authorized payment to Captured. Settlement runs asynchronously.
+         */
         post: operations["capturePayment"];
         delete?: never;
         options?: never;
@@ -65,7 +143,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Refund a payment */
+        /**
+         * Refund a payment
+         * @description Refunds a Settled or Captured payment.
+         */
         post: operations["refundPayment"];
         delete?: never;
         options?: never;
@@ -77,12 +158,34 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @enum {string} */
-        PaymentStatus: "Pending" | "Authorized" | "Captured" | "Settled" | "Failed" | "Refunded";
+        CapturePaymentRequest: {
+            /** Format: int64 */
+            amount_minor: null | number | string;
+        };
+        CreatePaymentRequest: {
+            /** Format: int64 */
+            amount_minor: number | string;
+            currency: string;
+            card_token: string;
+            customer_reference: null | string;
+            metadata: null | {
+                [key: string]: string;
+            };
+        };
+        ErrorBody: {
+            code: string;
+            message: string;
+            details: unknown;
+            trace_id: null | string;
+            request_id: null | string;
+        };
+        ErrorEnvelope: {
+            error: components["schemas"]["ErrorBody"];
+        };
         PaymentEventDto: {
             id: string;
-            fromStatus?: string | null;
-            toStatus: string;
+            from_status: null | string;
+            to_status: string;
             actor: string;
             reason: string;
             payload: {
@@ -91,52 +194,28 @@ export interface components {
             /** Format: date-time */
             at: string;
         };
+        PaymentListResponse: {
+            data: components["schemas"]["PaymentResponse"][];
+            next_cursor: null | string;
+        };
         PaymentResponse: {
             id: string;
             /** Format: int64 */
-            amountMinor: number;
+            amount_minor: number | string;
             currency: string;
-            status: components["schemas"]["PaymentStatus"];
-            customerReference?: string | null;
+            status: string;
+            customer_reference: null | string;
             metadata: {
                 [key: string]: string;
             };
             /** Format: date-time */
-            createdAt: string;
+            created_at: string;
             /** Format: date-time */
-            updatedAt: string;
+            updated_at: string;
             events: components["schemas"]["PaymentEventDto"][];
-        };
-        PaymentListResponse: {
-            data: components["schemas"]["PaymentResponse"][];
-            nextCursor?: string | null;
-        };
-        CreatePaymentRequest: {
-            /** Format: int64 */
-            amountMinor: number;
-            currency: string;
-            cardToken: string;
-            customerReference?: string | null;
-            metadata?: {
-                [key: string]: string;
-            } | null;
-        };
-        CapturePaymentRequest: {
-            /** Format: int64 */
-            amountMinor?: number | null;
         };
         RefundPaymentRequest: {
             reason: string;
-        };
-        ErrorBody: {
-            code: string;
-            message: string;
-            details?: unknown;
-            traceId?: string | null;
-            requestId?: string | null;
-        };
-        ErrorEnvelope: {
-            error: components["schemas"]["ErrorBody"];
         };
     };
     responses: never;
@@ -152,7 +231,7 @@ export interface operations {
             query?: {
                 status?: string;
                 cursor?: string;
-                limit?: number;
+                limit?: number | string;
             };
             header?: never;
             path?: never;
@@ -167,6 +246,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -235,6 +332,15 @@ export interface operations {
                     "application/json": components["schemas"]["PaymentResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             /** @description Not Found */
             404: {
                 headers: {
@@ -259,7 +365,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["CapturePaymentRequest"];
+                "application/json": null | components["schemas"]["CapturePaymentRequest"];
             };
         };
         responses: {
@@ -270,6 +376,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Conflict */
@@ -296,7 +420,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["RefundPaymentRequest"];
+                "application/json": null | components["schemas"]["RefundPaymentRequest"];
             };
         };
         responses: {
@@ -307,6 +431,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaymentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Conflict */
