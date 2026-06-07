@@ -68,7 +68,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const response = await fetch(buildUrl(path, query), {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(toSnakeCase(body)),
     signal,
   });
 
@@ -78,9 +78,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const text = await response.text();
   const parsed: unknown = text.length === 0 ? null : safeParseJson(text);
+  const camelized = toCamelCase(parsed);
 
   if (!response.ok) {
-    const envelope = parsed as ErrorEnvelopeBody | null;
+    const envelope = camelized as ErrorEnvelopeBody | null;
     if (envelope && typeof envelope === 'object' && 'error' in envelope) {
       throw new ApiError(response.status, envelope);
     }
@@ -95,7 +96,38 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     });
   }
 
-  return parsed as T;
+  return camelized as T;
+}
+
+const snakeToCamel = (key: string): string =>
+  key.replace(/_([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
+const camelToSnake = (key: string): string =>
+  key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+function toCamelCase(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toCamelCase);
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        snakeToCamel(k),
+        toCamelCase(v),
+      ]),
+    );
+  }
+  return value;
+}
+
+function toSnakeCase(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(toSnakeCase);
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        camelToSnake(k),
+        toSnakeCase(v),
+      ]),
+    );
+  }
+  return value;
 }
 
 function safeParseJson(text: string): unknown {
