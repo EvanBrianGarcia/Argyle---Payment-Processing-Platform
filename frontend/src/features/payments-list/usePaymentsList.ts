@@ -8,5 +8,7 @@ export function usePaymentsList(query: ListPaymentsQuery) {
     queryKey: queryKeys.payments.list(query),
     queryFn: ({ signal }) => paymentsApi.list(query, signal),
     placeholderData: (prev) => prev,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
   });
 }

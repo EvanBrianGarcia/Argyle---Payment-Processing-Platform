@@ -58,6 +58,10 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
+# --- seed demo data (payments across every status, so filter chips have rows) ---
+step "Seeding demo payments across every status"
+./scripts/seed-demo-data.sh
+
 # --- run the demo walk ---
 if [[ $RUN_DEMO -eq 1 ]]; then
   step "Running endpoint demo walk"
