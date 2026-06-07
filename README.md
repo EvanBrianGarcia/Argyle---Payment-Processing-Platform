@@ -18,47 +18,6 @@ data-dense, no UI kit, intentional.
 
 ---
 
-## Heads-up: the `Pending → Authorized` gap
-
-The API exposes `create`, `capture`, `refund`, list, and detail. The
-`Payment` domain aggregate exposes `Authorize()`, `Capture()`,
-`Settle()`, `Fail()`, and `Refund()` — the full state machine is there
-and tested. **What's missing is an API path from `Pending` to
-`Authorized`.** No endpoint calls `Payment.Authorize()`, so a payment
-created through the public API stays `Pending` until something else
-advances it.
-
-`./scripts/run.sh` papers over this by also running
-[`scripts/seed-demo-data.sh`](scripts/seed-demo-data.sh), which inserts
-~13 payments spread across every status (via direct SQL) so the
-dashboard's filter chips have real rows to show and the full event
-timeline view has things to render. The acceptance walk
-[`./scripts/demo.sh`](scripts/demo.sh) is honest about the gap: it
-prints `Skipping capture — payment is Pending` and `Skipping refund —
-payment is Pending` rather than failing, then continues to exercise
-list / detail / cross-tenant isolation.
-
-What would close it, in increasing scope:
-
-1. **A Dev-only "auto-authorize on create" shortcut** inside the create
-   handler, gated behind a config flag. The simplest change. The
-   tradeoff: today's integration suite (and the `TestDataBuilder`
-   helper it leans on) explicitly stage Pending payments and then call
-   `Authorize()` themselves; flipping the flag on without isolating the
-   test environment would break ~30 of those tests. Worth a focused
-   pass — not a one-shot.
-2. **A real `POST /v1/payments/{id}/authorize` endpoint** wired through
-   a stub `IPaymentProcessor.AuthorizeAsync` (the existing
-   `IPaymentProcessor` only handles settlement today). Closer to how a
-   real processor adapter would attach.
-3. **Auto-authorize as a side effect of create**, driven by a real
-   processor callback after the create response returns. Production
-   shape.
-
-Called out again under [§6 Areas for future improvement](#6-areas-for-future-improvement).
-
----
-
 ## 1. Setup instructions
 
 ### What you need
@@ -147,116 +106,58 @@ payment processor, updates the payment, and records what happened. The
 dashboard reads the API to show operators the current state and the full
 history of every payment.
 
-### Components
-
-What talks to what. Subgraphs group the synchronous request path,
-the async settlement pipeline, and the shared data + observability
-edges.
+### The picture as a diagram
 
 ```mermaid
 flowchart TB
-    Merchant([Merchant backend])
-    Operator([Operator])
-
-    subgraph Sync ["Synchronous request path"]
-        Dashboard["Dashboard<br/>Vite + React"]
-        API["API<br/>ASP.NET Core 10"]
+    subgraph Client
+      Browser["Dashboard (React + Vite)"]
+      MerchantAPI["Merchant server-to-server"]
     end
 
-    subgraph Async ["Async settlement pipeline"]
-        Dispatcher["Outbox Dispatcher<br/>(in API process)"]
-        RabbitMQ[["RabbitMQ"]]
-        Worker["Worker<br/>MassTransit consumer"]
-        Processor[/"Stub Payment Processor"/]
+    subgraph App["Application tier"]
+      API["Payments API (ASP.NET Core)"]
     end
 
-    Postgres[("Postgres 16")]
-    Otel["OTel Collector<br/>(prod swap)"]
+    subgraph Data["Data tier"]
+      PG[("PostgreSQL")]
+    end
 
-    Merchant -->|HTTPS| API
-    Operator --> Dashboard
-    Dashboard -->|typed OpenAPI client| API
+    subgraph Async["Async tier"]
+      Outbox["Outbox dispatcher"]
+      MQ["RabbitMQ (settlement queue + DLQ)"]
+      Worker["Settlement Worker"]
+      Stub["Stub Processor Adapter"]
+    end
 
-    API -->|state + outbox<br/>same transaction| Postgres
-    API --> Dispatcher
-    Dispatcher -.->|poll| Postgres
-    Dispatcher -->|publish| RabbitMQ
-    RabbitMQ -->|consume| Worker
-    Worker --> Processor
-    Worker -->|state + audit| Postgres
+    subgraph Obs["Observability (prod swap)"]
+      Logs["Loki / ELK"]
+      Metrics["Prometheus + Grafana"]
+      Traces["Tempo / Jaeger"]
+    end
 
-    API -.->|metrics + traces| Otel
-    Worker -.->|metrics + traces| Otel
+    Browser --> API
+    MerchantAPI --> API
+    API <--> PG
+    PG --> Outbox
+    Outbox --> MQ
+    MQ --> Worker
+    Worker --> Stub
+    Worker --> PG
+    API -.-> Logs
+    Worker -.-> Logs
+    API -.-> Metrics
+    Worker -.-> Metrics
+    API -.-> Traces
+    Worker -.-> Traces
 ```
 
-### The settlement flow as a sequence
-
-This is what makes the platform's design interesting — and it's the
-part a static box diagram can't show well. When a merchant captures
-a payment, two state changes (the payment row and the outbox message)
-land in **one database transaction**, so neither can exist without
-the other. The dispatcher publishes the outbox row asynchronously,
-the worker consumes it, and the trace context rides the whole way
-across the queue boundary.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant M as Merchant
-    participant A as API
-    participant DB as Postgres
-    participant D as Outbox Dispatcher
-    participant MQ as RabbitMQ
-    participant W as Worker
-    participant P as Stub Processor
-
-    M->>A: POST /v1/payments/{id}/capture<br/>Idempotency-Key
-    activate A
-    A->>DB: BEGIN
-    A->>DB: UPDATE payment → Captured (version++)
-    A->>DB: INSERT payment_events (Authorized→Captured)
-    A->>DB: INSERT payment_outbox (SettlePayment + traceparent)
-    A->>DB: COMMIT
-    A-->>M: 200 OK {status: Captured}
-    deactivate A
-
-    Note over D,DB: Dispatcher polls every 2s
-    D->>DB: SELECT outbox WHERE dispatched_at IS NULL
-    D->>MQ: publish SettlePayment (+ traceparent)
-    D->>DB: UPDATE outbox SET dispatched_at = now()
-
-    MQ->>W: deliver SettlePayment
-    activate W
-    Note over W,DB: same trace_id as the original HTTP request
-    W->>DB: SELECT payment FOR UPDATE
-    W->>P: SettleAsync(payment)
-    P-->>W: Success(externalReference)
-    W->>DB: UPDATE payment → Settled<br/>+ INSERT payment_events
-    W-->>MQ: ack
-    deactivate W
-```
-
-A few things worth calling out:
-
-- **The outbox close-out (steps 4–6) is one transaction.** If the
-  commit fails, no payment row changes *and* no message gets
-  published. If RabbitMQ is down when the dispatcher runs, the row
-  stays unsent and the next poll picks it up — no data is ever lost
-  to a publish failure.
-- **`SELECT FOR UPDATE` (step 11) serializes concurrent deliveries**
-  of the same `SettlePayment` message (whether from MassTransit retry
-  or RabbitMQ redelivery). The consumer is therefore safe to be
-  invoked more than once for the same payment.
-- **Trace context propagates through the queue envelope** (the
-  `traceparent` written in step 4 and read in step 9). Open the
-  worker's processing span in your trace UI and you can walk back up
-  to the original HTTP request span.
-- **Permanent failures dead-letter, transient failures retry.** Not
-  shown above for clarity — MassTransit's retry policy handles
-  transient failures with exponential backoff; the
-  `PermanentSettlementFailureException` is in the `Ignore<>` list and
-  goes straight to `settlement_error`, leaving the payment in
-  `Captured` for an operator to inspect.
+Solid arrows are the live request and settlement path. Dotted arrows
+are observability — Loki / Prometheus / Tempo are the production
+target; today the API and Worker emit on `/metrics` and the OTel SDK
+is wired to a console exporter that swaps to OTLP via one config line.
+The Pending → Authorized step (called out in §6) is the missing edge
+between create and capture in the live system.
 
 ### The pieces
 
@@ -458,11 +359,27 @@ first item is the most important.
 
 ## 6. Areas for future improvement
 
-1. **An authorization endpoint.** Today payments are created in
-   `Pending` and the API has no endpoint to move them to `Authorized`.
-   The domain has the method; capture refuses to run without it. A
-   real processor adapter and a `POST /v1/payments/{id}/authorize` (or
-   automatic authorize on create with a callback) would close the loop.
+1. **An authorization path from `Pending` to `Authorized`.** The
+   `Payment` aggregate has `Authorize()`, `Capture()`, `Settle()`,
+   `Fail()`, and `Refund()` — the full state machine is there and
+   tested. What's missing is an API caller for `Authorize()`. A
+   payment created through the public API stays `Pending` until
+   something else advances it, so `scripts/seed-demo-data.sh` plants
+   demo rows at every status via direct SQL and `scripts/demo.sh`
+   honestly prints "Skipping capture — payment is Pending" when it
+   hits the gap. Three closure options, in increasing scope:
+   (a) A Dev-only "auto-authorize on create" flag inside the create
+   handler — simplest, but the integration suite's `TestDataBuilder`
+   stages Pending payments and calls `Authorize()` itself, so flipping
+   the flag on without isolating the test environment would break ~30
+   tests; worth a focused pass, not a one-shot.
+   (b) A real `POST /v1/payments/{id}/authorize` endpoint wired
+   through a stub `IPaymentProcessor.AuthorizeAsync` (the existing
+   `IPaymentProcessor` only handles settlement today). Closer to how
+   a real processor adapter would attach.
+   (c) Auto-authorize as a side effect of create, driven by a real
+   processor callback after the create response returns. Production
+   shape.
 2. **Reconciliation.** A daily batch comparing our `payments` table
    against the processor's settlement report. Catches drift early.
 3. **Partial captures and partial refunds.** The schema supports it;
