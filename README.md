@@ -110,7 +110,9 @@ docker compose logs -f api worker    # first boot runs EF Core Migrate and seeds
 ```
 
 The API listens on `http://localhost:8080` (mapped from the container's
-`:8080`). Postgres listens on `localhost:5432`. RabbitMQ's AMQP port is
+`:8080`). Postgres listens on `localhost:5433` (host-side; the container
+binds the conventional `:5432` internally — the offset dodges a local
+Postgres install). RabbitMQ's AMQP port is
 `5672` and the management UI is on `http://localhost:15672` (login
 `guest` / `guest`). The API container runs migrations in `Development`
 mode at startup, so the first boot creates the schema and inserts the two
@@ -857,7 +859,7 @@ failures); the observability decisions live in ADRs 0011/0012/0013.
 
 | Symptom                                                                                                  | Cause / fix                                                                                                                                                                                                                                |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `docker compose up` fails with `port is already allocated` on `5432`                                    | A local Postgres (Homebrew, Postgres.app, another macOS Postgres install) owns the host port. Override the host-side mapping for one boot: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects to Postgres through the internal Docker network, so it is unaffected. Integration tests are also unaffected — Testcontainers always uses a random port. |
+| `docker compose up` fails with `port is already allocated` on `5433`                                    | Something else owns host port 5433. Override: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects to Postgres through the internal Docker network, so it is unaffected. Integration tests are also unaffected — Testcontainers always uses a random port. |
 | `Bind for 0.0.0.0:8080 failed: port is already allocated`                                                | Something else owns host port 8080. Override the host-side mapping: `API_HOST_PORT=5050 docker compose up -d` (then use `http://localhost:5050` for the walkthrough). |
 | `Cannot connect to the Docker daemon`                                                                    | Docker Desktop isn't running. Open it; wait for the whale icon to stop animating; retry. Integration tests need this too.                                                                                                              |
 | `dotnet test` integration tests fail with `28P01 password authentication failed for user "postgres"`     | A stray host Postgres is listening on `localhost:5432` and the API host config is falling through to it. Stop the host Postgres, or run only the unit tests (`--filter "FullyQualifiedName~UnitTests"`).                                |
