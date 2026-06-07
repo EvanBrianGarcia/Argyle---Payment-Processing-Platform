@@ -18,6 +18,47 @@ data-dense, no UI kit, intentional.
 
 ---
 
+## Heads-up: the `Pending → Authorized` gap
+
+The API exposes `create`, `capture`, `refund`, list, and detail. The
+`Payment` domain aggregate exposes `Authorize()`, `Capture()`,
+`Settle()`, `Fail()`, and `Refund()` — the full state machine is there
+and tested. **What's missing is an API path from `Pending` to
+`Authorized`.** No endpoint calls `Payment.Authorize()`, so a payment
+created through the public API stays `Pending` until something else
+advances it.
+
+`./scripts/run.sh` papers over this by also running
+[`scripts/seed-demo-data.sh`](scripts/seed-demo-data.sh), which inserts
+~13 payments spread across every status (via direct SQL) so the
+dashboard's filter chips have real rows to show and the full event
+timeline view has things to render. The acceptance walk
+[`./scripts/demo.sh`](scripts/demo.sh) is honest about the gap: it
+prints `Skipping capture — payment is Pending` and `Skipping refund —
+payment is Pending` rather than failing, then continues to exercise
+list / detail / cross-tenant isolation.
+
+What would close it, in increasing scope:
+
+1. **A Dev-only "auto-authorize on create" shortcut** inside the create
+   handler, gated behind a config flag. The simplest change. The
+   tradeoff: today's integration suite (and the `TestDataBuilder`
+   helper it leans on) explicitly stage Pending payments and then call
+   `Authorize()` themselves; flipping the flag on without isolating the
+   test environment would break ~30 of those tests. Worth a focused
+   pass — not a one-shot.
+2. **A real `POST /v1/payments/{id}/authorize` endpoint** wired through
+   a stub `IPaymentProcessor.AuthorizeAsync` (the existing
+   `IPaymentProcessor` only handles settlement today). Closer to how a
+   real processor adapter would attach.
+3. **Auto-authorize as a side effect of create**, driven by a real
+   processor callback after the create response returns. Production
+   shape.
+
+Called out again under [§6 Areas for future improvement](#6-areas-for-future-improvement).
+
+---
+
 ## 1. Setup instructions
 
 ### What you need
@@ -105,6 +146,50 @@ A separate worker process consumes those messages, talks to the (stubbed)
 payment processor, updates the payment, and records what happened. The
 dashboard reads the API to show operators the current state and the full
 history of every payment.
+
+### The picture as a diagram
+
+```mermaid
+flowchart LR
+    Merchant([Merchant<br/>backend])
+    Operator([Operator])
+    Dashboard["Dashboard<br/>Vite + React<br/>TanStack Query"]
+    API["API<br/>ASP.NET Core 10<br/>Minimal APIs + MediatR<br/>:8080"]
+    Dispatcher["Outbox Dispatcher<br/>BackgroundService<br/>polls every 2s"]
+    RabbitMQ[["RabbitMQ<br/>quorum queue + DLQ<br/>:5672"]]
+    Worker["Worker<br/>.NET Generic Host<br/>MassTransit consumer<br/>:9090 metrics"]
+    Processor[/"Stub Payment Processor<br/>IPaymentProcessor"/]
+    Postgres[("Postgres 16<br/>payments, payment_events,<br/>idempotency_keys,<br/>payment_outbox")]
+    Otel["OTel Collector<br/>traces + metrics + logs<br/>(prod swap)"]
+
+    Merchant -- "HTTPS<br/>Idempotency-Key" --> API
+    Operator -- "browser" --> Dashboard
+    Dashboard -- "typed client<br/>openapi-typescript" --> API
+
+    API -- "EF Core<br/>state + outbox<br/>in one transaction" --> Postgres
+    Dispatcher -. "reads unsent rows" .-> Postgres
+    API ==> Dispatcher
+    Dispatcher -- "publish<br/>+ traceparent" --> RabbitMQ
+    RabbitMQ -- "consume<br/>+ trace context" --> Worker
+    Worker -- "settle / fail" --> Processor
+    Worker -- "SELECT ... FOR UPDATE<br/>state + audit event" --> Postgres
+
+    API -.->|"/metrics<br/>RED + business"| Otel
+    Worker -.->|"/metrics<br/>queue + processing"| Otel
+
+    classDef edge fill:#fff,stroke:#888,stroke-dasharray: 3 3
+    classDef store fill:#fdf6e3,stroke:#b58900
+    classDef async fill:#eef7ff,stroke:#268bd2
+    classDef ext fill:#f7eaff,stroke:#6c71c4
+    class Postgres store
+    class RabbitMQ,Dispatcher,Worker async
+    class Otel,Processor ext
+```
+
+Solid arrows are the synchronous request path. The thick `API ==> Dispatcher`
+edge is the in-process hand-off from the request handler (which wrote the
+outbox row) to the polling dispatcher (which will publish it). Dotted arrows
+are observability and out-of-band reads.
 
 ### The pieces
 
