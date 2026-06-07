@@ -1,869 +1,351 @@
 # Argyle — Payment Processing Platform
 
-A simplified payment processing platform built for the Argyle senior engineer
-take-home. This repository contains **Phases 1, 2, 3, 4, and 5**: the vertical
-slice that proves the spine works end-to-end (Phase 1), the full payment
-state machine with capture, refund, list, and per-transition audit events
-(Phase 2), the async settlement worker — transactional outbox,
-RabbitMQ-backed publish, idempotent consumer, retry policy + DLQ, RabbitMQ
-readiness probe (Phase 3), the observability wiring — OpenTelemetry trace
-propagation across the API → MQ → Worker boundary, Prometheus metrics on
-dedicated endpoints, response `traceparent` header, and a property-deny-list
-log redaction enricher (Phase 4), and the payments operations dashboard —
-a Vite + React + TanStack Query frontend talking to the live API over a
-generated OpenAPI client (Phase 5).
+A take-home build for the Argyle senior engineer exercise. Two services
+behind a single API, a worker that handles money movement out-of-band,
+and a dashboard for operators to see what happened.
 
-The exercise brief lives at [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
-The implementation plan lives under [`.claude/plans/`](.claude/plans).
-
----
+The full brief lives in [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 
 ## The dashboard
 
 ![Payments operations dashboard](docs/dashboard-screenshot.png)
 
-The Phase 5 dashboard is a single-page Vite + React app under
-[`frontend/`](frontend). It follows a Swiss / data-dense visual direction
-([ADR-0015](docs/adr/0015-visual-direction-swiss-data-dense.md)) — no
-shadcn, no Tailwind, no UI kit — and renders the same OpenAPI surface the
-backend exposes via a typed TanStack Query client. See
-[`frontend/README.md`](frontend/README.md) for run instructions.
+A single-page Vite + React app under [`frontend/`](frontend). Lists every
+payment, filters by status, opens one to show the full event timeline.
+Visual direction documented in
+[ADR-0015](docs/adr/0015-visual-direction-swiss-data-dense.md) — Swiss /
+data-dense, no UI kit, intentional.
 
 ---
 
-## What's built right now
+## 1. Setup instructions
 
-| Capability                                                       | Phase |
-| ---------------------------------------------------------------- | :---: |
-| `POST /v1/payments` (create, persisted, returns `pay_…` ULID)    |   1   |
-| `GET /v1/payments/{id}` (own-merchant only, cross-tenant 404)    |   1   |
-| `Idempotency-Key` header — replay returns identical body         |   1   |
-| Per-operation idempotency scoping (`create` / `capture` / `refund`) |   2   |
-| Dev bearer auth (SHA-256 hash of seeded merchant key)            |   1   |
-| Structured JSON logs with `request_id` + `merchant_id` + `trace_id` |   1+2 |
-| `X-Request-Id` response header AND `request_id` in error body    |   1+2 |
-| `card_token` redaction (never logged)                            |   1   |
-| `GET /health/live`                                               |   1   |
-| Postgres 16 + EF Core 10 migrations, seeded with two merchants   |   1+2 |
-| Integration tests over real Postgres via Testcontainers          |   1+2 |
-| `Payment` aggregate with state machine + invalid-transition guards |  2   |
-| `POST /v1/payments/{id}/capture` (Authorized → Captured)         |   2   |
-| `POST /v1/payments/{id}/refund` (Captured/Settled → Refunded)    |   2   |
-| `GET /v1/payments?status=&limit=&cursor=` cursor pagination       |   2   |
-| `payment_events` audit table populated on every transition       |   2   |
-| Optimistic concurrency via `payments.version`                    |   2   |
-| Lifecycle event timeline returned by `GET /v1/payments/{id}`     |   2   |
-| Transactional outbox (`payment_outbox`) written in same tx as capture |   3   |
-| `OutboxDispatcher` BackgroundService publishes via MassTransit + RabbitMQ |   3   |
-| `PaymentPlatform.Worker` host with idempotent `SettlePaymentConsumer` |   3   |
-| `SELECT … FOR UPDATE` row lock serializes concurrent settlement deliveries | 3 |
-| Exponential retry policy with `Ignore<PermanentSettlementFailureException>` |   3   |
-| `settlement_error` DLQ catches permanent failures, payment stays Captured | 3 |
-| `GET /health/ready` — Postgres + RabbitMQ readiness probes       |   3   |
-| OpenTelemetry SDK + auto-instrumentation (API + Worker)          |   4   |
-| W3C `traceparent` propagation across the RabbitMQ envelope       |   4   |
-| Response `traceparent` header + `trace_id`/`span_id` on every log line | 4 |
-| `/metrics` endpoint with RED + business + queue counters         |   4   |
-| Worker `/metrics` on a dedicated port (`:9090`)                  |   4   |
-| Log redaction enricher (deny list: `card_token`, `cvv`, `pan`, …) at every nesting depth | 4 |
-| React dashboard                                                  |   5   |
+### What you need
 
-Phases 1–4 prioritize operational depth on a small surface, not breadth.
+- Docker Desktop (4.x or newer)
+- `jq` for the demo script (`brew install jq`)
+- `pnpm` for the frontend (`npm i -g pnpm@9`)
 
----
+That's it for the smoke test. The .NET 10 SDK is only needed if you want
+to run the test suite outside Docker.
 
-## Quick start
-
-### Prerequisites
-
-- Docker Desktop (tested on 4.76 / Engine 29.x; older engines have a TLS handshake quirk with Testcontainers)
-- .NET 10 SDK (only required to run `dotnet test` outside Docker)
-- `curl`, `jq`, and `uuidgen` for the acceptance walkthrough
-
-### Fresh-clone smoke test (~2 min, end-to-end)
+### Bring everything up
 
 ```bash
 git clone <this repo>
 cd "Argyle - Payment Processing Platform"
-
-docker compose up -d                 # postgres + rabbitmq + api + worker
-./scripts/demo.sh                    # exercises every endpoint, prints the audit trail
+./scripts/run.sh
 ```
 
-`demo.sh` walks readiness → create → idempotent replay → capture (when
-applicable) → refund (when applicable) → list → detail with event timeline
-→ cross-tenant 404, asserting status codes at every step and exiting
-non-zero on any surprise. End-of-run banner: `✓ All steps green`.
+That one command:
 
-For the frontend dashboard:
+1. Builds and starts Postgres, RabbitMQ, the API, and the worker.
+2. Waits for everything to report healthy.
+3. Walks every API endpoint via [`scripts/demo.sh`](scripts/demo.sh) and
+   asserts the responses (create, idempotent replay, capture, refund,
+   list, detail with audit trail, cross-merchant isolation check).
+4. Prints the dashboard launch command.
+
+Add `--frontend` to also start the dashboard in the same shell, or
+`--no-demo` to skip the endpoint walk.
+
+### Launch the dashboard
 
 ```bash
-cd frontend && pnpm install && pnpm dev    # http://localhost:5173/payments
+cd frontend && pnpm install && pnpm dev
+# http://localhost:5173/payments
 ```
 
-### Bring the stack up (manual)
+### Run the tests
 
 ```bash
-docker compose up -d
-docker compose ps                    # postgres + rabbitmq + api + worker — all four healthy
-docker compose logs -f api worker    # first boot runs EF Core Migrate and seeds merchants
-```
-
-The API listens on `http://localhost:8080` (mapped from the container's
-`:8080`). Postgres listens on `localhost:5433` (host-side; the container
-binds the conventional `:5432` internally — the offset dodges a local
-Postgres install). RabbitMQ's AMQP port is
-`5672` and the management UI is on `http://localhost:15672` (login
-`guest` / `guest`). The API container runs migrations in `Development`
-mode at startup, so the first boot creates the schema and inserts the two
-seed merchants. The worker container connects to RabbitMQ on the internal
-Docker network and waits for capture-driven settlement messages.
-
-To shut down and wipe state:
-
-```bash
-docker compose down -v               # -v removes the postgres-data volume
-```
-
----
-
-## Acceptance walkthrough
-
-The Phase 1 plan ships with a seven-step acceptance script. Run it end-to-end
-against the live stack:
-
-```bash
-# 1. Create a payment as merchant "acme"
-RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa","customer_reference":"order-1"}')
-echo "$RESP" | jq .
-PAYMENT_ID=$(echo "$RESP" | jq -r .id)
-
-# 2. Fetch it back
-curl -s http://localhost:8080/v1/payments/$PAYMENT_ID \
-  -H "Authorization: Bearer dev-key-mrc-acme" | jq .
-
-# 3. Idempotent replay — same key + same body → byte-identical response, no second DB row
-KEY=$(uuidgen)
-RESP1=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":5000,"currency":"USD","card_token":"tok_stub_visa"}')
-RESP2=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":5000,"currency":"USD","card_token":"tok_stub_visa"}')
-diff <(echo "$RESP1") <(echo "$RESP2")     # no output → bodies match
-
-# 4. Cross-merchant isolation — should be 404, never 403, never the payment body
-curl -i http://localhost:8080/v1/payments/$PAYMENT_ID \
-  -H "Authorization: Bearer dev-key-mrc-pied"
-
-# 5. No auth — 401 with error envelope
-curl -i http://localhost:8080/v1/payments/$PAYMENT_ID
-
-# 6. Liveness
-curl http://localhost:8080/health/live
-
-# 7. Tests
+# Backend — 263 tests, integration suite uses Testcontainers (needs Docker)
 cd backend && dotnet test
+
+# Frontend — 40 unit/component + 2 Playwright E2E
+cd frontend && pnpm test && pnpm e2e
 ```
 
-Inspect the API logs while running steps 1–6 — every line is a single JSON
-object, every request emits `request_id`, every authenticated request also
-carries `merchant_id`. Re-issuing a request with `-H "X-Request-Id: my-trace-id"`
-will pin that id end-to-end.
+Coverage snapshot in [`docs/coverage.md`](docs/coverage.md).
+
+### Dev keys
+
+Two merchants are seeded on first boot. Tokens stay the same across
+restarts (the migration plants the SHA-256 hashes).
+
+| Merchant   | Bearer token         |
+| ---------- | -------------------- |
+| Acme Corp  | `dev-key-mrc-acme`   |
+| Pied Piper | `dev-key-mrc-pied`   |
+
+### Useful URLs once the stack is up
+
+| What                 | Where                                                       |
+| -------------------- | ----------------------------------------------------------- |
+| API                  | `http://localhost:8080`                                     |
+| OpenAPI schema       | `http://localhost:8080/openapi/v1.json`                     |
+| Readiness probe      | `http://localhost:8080/health/ready`                        |
+| API metrics          | `http://localhost:8080/metrics`                             |
+| Worker metrics       | `http://localhost:9090/metrics`                             |
+| RabbitMQ management  | `http://localhost:15672` (`guest` / `guest`)                |
+| Dashboard            | `http://localhost:5173/payments`                            |
 
 ---
 
-## Phase 2 endpoints
-
-Phase 2 adds three endpoints on top of the Phase 1 spine. All three reuse the
-same `Idempotency-Key` header contract and return the same `PaymentResponse`
-shape — now extended with `events[]` (the per-transition audit timeline) and
-`updated_at`. A live capture of these steps lives at
-[`docs/acceptance/phase-2-walkthrough.md`](docs/acceptance/phase-2-walkthrough.md).
-
-The Phase 2 acceptance walk assumes a payment is already in `Authorized`.
-The authorization processor lands later (Phase 4 — real card-network auth),
-so for now we drive `Pending → Authorized` via psql. This mirrors the shape
-the future authorization worker will use; Phase 3's worker handles the
-*settlement* side of the same outbox pattern (see
-[Phase 3 walkthrough](#phase-3-walkthrough) below).
-
-```bash
-# Seed a Pending payment
-RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
-PID=$(echo "$RESP" | jq -r .id)
-
-# Phase 3 stand-in: drive Pending → Authorized
-docker compose exec postgres psql -U postgres payments -c \
-  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';
-   INSERT INTO payment_events (id, payment_id, from_status, to_status, actor, reason, payload, at)
-   VALUES ('evt_' || lower(replace(gen_random_uuid()::text, '-', '')),
-           '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
-
-# Capture (Authorized → Captured)
-curl -s -X POST http://localhost:8080/v1/payments/$PID/capture \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" -d '{}' | jq .
-# → 200, status: "Captured", events array has 3 entries
-
-# Refund (Captured → Refunded)
-curl -s -X POST http://localhost:8080/v1/payments/$PID/refund \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"reason":"customer_request"}' | jq .
-# → 200, status: "Refunded", events array has 4 entries
-
-# Attempting to capture a Captured payment → 409 invalid_state_transition
-curl -i -X POST http://localhost:8080/v1/payments/$PID/capture \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" -d '{}'
-
-# List with status filter and cursor pagination
-curl -s "http://localhost:8080/v1/payments?status=Refunded&limit=10" \
-  -H "Authorization: Bearer dev-key-mrc-acme" | jq .
-# → { data: [...], next_cursor: null }
-```
-
-Replays are byte-identical: the same `Idempotency-Key` + same body returns
-the cached `PaymentResponse` without re-running the transition. A different
-body with the same key returns `409 idempotency_key_conflict`. A different
-key against a payment already past the legal transition returns `409
-invalid_state_transition`.
-
----
-
-## Phase 3 walkthrough
-
-Phase 3 closes the `Captured → Settled` loop with an async worker. The
-capture handler writes a `payment_outbox` row in the same transaction as
-the `payments` update, an `OutboxDispatcher` BackgroundService publishes
-it via MassTransit, and `PaymentPlatform.Worker` consumes it under a
-`SELECT … FOR UPDATE` row lock.
-
-```
-   POST /v1/payments/{id}/capture
-                │
-                ▼
-       CapturePaymentHandler  ─── one transaction ───┐
-                │                                    │
-                ▼                                    ▼
-        payments (status=Captured)        payment_outbox (dispatched_at IS NULL)
-                                                     │
-                          OutboxDispatcher polls ────┘
-                                                     │
-                                                     ▼
-                                       RabbitMQ "settlement" exchange
-                                                     │
-                                                     ▼
-                                       PaymentPlatform.Worker
-                                                     │
-                                                     ▼
-                                       SettlePaymentConsumer
-                                       (FOR UPDATE row lock,
-                                        idempotent re-delivery,
-                                        retry policy + DLQ)
-                                                     │
-                                                     ▼
-                                       payments (status=Settled)
-                                       payment_events (actor=worker)
-```
-
-### Happy path — capture lands in `Settled` within seconds
-
-```bash
-# Seed a Pending payment and drive it to Authorized as in the Phase 2 walk
-RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
-PID=$(echo "$RESP" | jq -r .id)
-
-docker compose exec postgres psql -U postgres payments -c \
-  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';
-   INSERT INTO payment_events (id, payment_id, from_status, to_status, actor, reason, payload, at)
-   VALUES ('evt_' || lower(replace(gen_random_uuid()::text, '-', '')),
-           '$PID', 'Pending', 'Authorized', 'system', 'auth_ok', '{}', now());"
-
-# Capture — the API commits the outbox row in the same transaction
-curl -s -X POST http://localhost:8080/v1/payments/$PID/capture \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" -d '{}' | jq .status
-# → "Captured"
-
-# Peek the outbox row — should appear immediately, dispatched_at NULL
-docker compose exec postgres psql -U postgres payments -c \
-  "SELECT id, aggregate_id, message_type, dispatched_at FROM payment_outbox WHERE aggregate_id='$PID';"
-
-# Wait ~3s for the dispatcher to publish and the worker to settle
-sleep 3
-curl -s http://localhost:8080/v1/payments/$PID \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  | jq '{status, events: [.events[] | {from_status, to_status, actor, reason}]}'
-# → status: "Settled"
-#   events ends with { from_status: "Captured", to_status: "Settled", actor: "worker", reason: "settled" }
-
-docker compose exec postgres psql -U postgres payments -c \
-  "SELECT dispatched_at FROM payment_outbox WHERE aggregate_id='$PID';"
-# → dispatched_at IS NOT NULL
-```
-
-### Readiness probe — `/health/ready`
-
-```bash
-curl -s http://localhost:8080/health/ready | jq .
-# → { status: "healthy", checks: [{ name: "postgres", healthy: true },
-#                                 { name: "rabbitmq",  healthy: true }] }
-
-docker compose stop rabbitmq
-curl -i http://localhost:8080/health/ready          # → 503, rabbitmq healthy: false
-docker compose start rabbitmq && sleep 5
-curl -i http://localhost:8080/health/ready          # → 200 again
-```
-
-`/health/live` (Phase 1) is unchanged — it only proves the API process is up.
-
-### Failure modes — retry and DLQ
-
-The worker ships a stub processor with three modes selected via the
-`Worker__StubProcessor__Mode` env var on the `worker` container:
-
-| Mode                     | Behavior                                                            |
-| ------------------------ | ------------------------------------------------------------------- |
-| `AlwaysSucceed`          | Default. Settles every captured payment.                            |
-| `FailNTimesThenSucceed`  | First `Worker__StubProcessor__FailureCount` calls per payment return `TransientFailure`. The retry policy redelivers. |
-| `AlwaysFailPermanent`    | Returns `PermanentFailure`. The retry policy's `Ignore<>` filter sends the message straight to `settlement_error`. |
-
-To exercise the retry path:
-
-```bash
-# Override the mode and recreate the worker container
-docker compose stop worker
-Worker__StubProcessor__Mode=FailNTimesThenSucceed \
-  docker compose up -d worker
-docker compose logs -f worker            # watch the two transient-failure log lines
-# Capture another payment — the worker logs two retries, then commits Settled
-```
-
-To exercise the DLQ path:
-
-```bash
-docker compose stop worker
-Worker__StubProcessor__Mode=AlwaysFailPermanent \
-  docker compose up -d worker
-# Capture another payment
-
-# The message lands in `settlement_error` — RabbitMQ's auto-created
-# dead-letter queue for the settlement endpoint. The payment stays Captured.
-docker compose exec rabbitmq rabbitmqctl list_queues name messages
-#  NAME                MESSAGES
-#  settlement          0
-#  settlement_error    1
-
-curl -s http://localhost:8080/v1/payments/$NEW_PID \
-  -H "Authorization: Bearer dev-key-mrc-acme" | jq .status
-# → "Captured" — no Settled event row, the payment_outbox row is still dispatched
-```
-
-Reset with `docker compose stop worker && docker compose up -d worker`
-(the default env brings `AlwaysSucceed` back).
-
----
-
-## Phase 4 — observability walkthrough
-
-Phase 4 wires three independent telemetry pipelines so a reviewer can pull
-`trace_id=abc…` out of any log line and walk through a payment's full
-life — `POST /v1/payments` → capture → outbox publish → MassTransit consume
-→ state update — across both the API and the Worker. Three rationale
-documents in `docs/adr/`:
-
-| ADR | Decision |
-| --- | --- |
-| [0011](docs/adr/0011-opentelemetry-sdk-and-default-exporter.md) | OpenTelemetry SDK + console exporter default; OTLP exporter conditional on `OpenTelemetry:Otlp:Endpoint`. |
-| [0012](docs/adr/0012-prometheus-net-for-metrics.md) | `prometheus-net` for `/metrics`, not the OTel Prometheus exporter. |
-| [0013](docs/adr/0013-log-redaction-deny-list.md) | Log redaction is a property-name deny list at the Serilog enricher layer with an explicit allow-list carve-out. |
-
-### One mental model
-
-Everything reads from `Activity.Current` as the source of truth. The OTel
-SDK populates it for HTTP requests, EF Core queries, and MassTransit
-publish/consume. Serilog's `TraceIdEnricher` reads it and stamps
-`trace_id` + `span_id` onto every log event. `/metrics` is a separate
-pipeline (prometheus-net) but reads the same `Activity.Current` for
-trace-aware labels. Both pipelines can ride the same OTLP collector
-later — only `OpenTelemetry:Otlp:Endpoint` needs to be set.
-
-### Scrape metrics
-
-```bash
-# RED + business counters from the API (port 8080 in container and on the host)
-curl -s http://localhost:8080/metrics | grep -E "^(http_requests_received|payments_)"
-
-# Queue + processing-duration counters from the Worker (dedicated port 9090)
-curl -s http://localhost:9090/metrics | grep -E "^mq_"
-```
-
-The API exposes:
-
-| Metric | Type | Labels | Source |
-| --- | --- | --- | --- |
-| `http_requests_received_total` | counter | `code`, `method`, `controller`, `action` | prometheus-net AspNetCore middleware |
-| `http_request_duration_seconds` | histogram | same | prometheus-net AspNetCore middleware |
-| `payments_created_total` | counter | `currency`, `merchant_id` | `CreatePaymentCommandHandler` |
-| `refunds_total` | counter | `currency` | `RefundPaymentCommandHandler` |
-| `payments_by_status` | gauge | `status` | `PaymentStatusGaugeUpdater` (samples DB on a 30s cadence) |
-
-The Worker exposes:
-
-| Metric | Type | Labels | Source |
-| --- | --- | --- | --- |
-| `mq_consumed_total` | counter | `queue` | `MetricsConsumerObserver.PostConsume` |
-| `mq_retries_total` | counter | `queue` | observer (transient-fault path) |
-| `mq_deadletter_total` | counter | `queue` | observer (permanent-fault path) |
-| `mq_processing_duration_seconds` | histogram | `queue` | observer (per-message duration) |
-
-`mq_queue_depth` is not currently exposed — RabbitMQ already publishes
-queue depth via its management API; tracking it from the consumer side
-would double-count.
-
-### Optional: run Prometheus locally
-
-```bash
-# Edit docker-compose.yml — uncomment the `prometheus` service block
-# and the `prometheus-data:` volume. Then:
-docker compose up -d prometheus
-open http://localhost:9091
-```
-
-The scrape config lives in [`ops/prometheus.example.yml`](ops/prometheus.example.yml) —
-edit that file rather than inlining scrape rules into `docker-compose.yml`.
-Both `payments-api` and `payments-worker` targets should show UP within
-~15s.
-
-### Inspect traces
-
-The console exporter emits each span as JSON to the API and Worker
-container logs. Filter by span-bearing lines:
-
-```bash
-docker compose logs api worker | grep -E '"TraceId":"[0-9a-f]{32}"'
-```
-
-For a real trace backend (Tempo, Jaeger, Honeycomb, Datadog), set the
-OTLP endpoint and restart:
-
-```bash
-OPENTELEMETRY__OTLP__ENDPOINT=http://otel-collector:4317 \
-  docker compose up -d --force-recreate api worker
-```
-
-Every response now carries a `traceparent` header in W3C format —
-`00-<32 hex>-<16 hex>-<2 hex>` — so a downstream service can adopt the
-same trace context without parsing log lines:
-
-```bash
-curl -i -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}' \
-  | grep -i '^traceparent'
-```
-
-If the request comes in carrying its own `traceparent` header, the API
-adopts that trace id as the parent — verified by
-`TracePropagationTests.IncomingTraceparent_BecomesParentOfServerSpan`.
-
-### Walk one payment across both processes
-
-```bash
-RESP=$(curl -s -X POST http://localhost:8080/v1/payments \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" \
-  -d '{"amount_minor":12500,"currency":"USD","card_token":"tok_stub_visa"}')
-PID=$(echo "$RESP" | jq -r .id)
-
-docker compose exec postgres psql -U postgres payments -c \
-  "UPDATE payments SET status='Authorized', version=version+1 WHERE id='$PID';"
-
-# Capture and grab the traceparent that comes back on the response
-TRACEPARENT=$(curl -s -D - -X POST http://localhost:8080/v1/payments/$PID/capture \
-  -H "Authorization: Bearer dev-key-mrc-acme" \
-  -H "Idempotency-Key: $(uuidgen)" \
-  -H "Content-Type: application/json" -d '{}' -o /dev/null \
-  | grep -i '^traceparent:' | awk '{print $2}' | tr -d '\r')
-TRACE_ID=$(echo "$TRACEPARENT" | cut -d- -f2)
-echo "trace_id=$TRACE_ID"
-
-sleep 3
-
-# Both API and Worker log lines tagged with the capture's trace_id
-docker compose logs api worker | grep "\"trace_id\":\"$TRACE_ID\""
-```
-
-### How redaction works
-
-`RedactingEnricher` (Serilog `ILogEventEnricher`) walks every log event's
-property bag — including nested `StructureValue`, `SequenceValue`, and
-`DictionaryValue` — and replaces values whose property name (normalized
-case-insensitively and with underscores stripped) matches the deny list.
-The allow list overrides matches so `trace_token` survives the literal
-substring intuition.
-
-Defaults from ADR-0013:
-
-| List | Names |
-| --- | --- |
-| Denied | `card_token`, `cvv`, `cvc`, `pan`, `authorization`, `api_key`, `password`, `secret`, `token` |
-| Allowed | `trace_token`, `trace_id`, `request_id`, `correlation_id` |
-
-Both lists are configurable per environment under `Logging:Redaction`
-in `appsettings.json`. The enricher honors the configured lists at
-construction time — adding a new field to the deny list is a config
-change with no code change.
-
-The integration test
-`RedactionEndToEndTests.PostPayments_WithCardTokenInBody_DoesNotLeakTokenIntoLogSink`
-proves the wiring is plumbed all the way to the test fixture's
-`InMemoryLogSink`; the unit suite
-(`RedactingEnricherTests`) covers the structural walk, case-insensitivity,
-allow-list override, null tolerance, and the depth-cap guard.
-
-A regression that introduces a new structured log call destructuring a
-request body — e.g. `_logger.LogInformation("Payment {@Command}", command)` —
-will not leak `card_token`; it gets stamped `"***"` on the way out.
-
----
-
-## Payment state machine
-
-Phase 2's `Payment` aggregate enforces every transition. Illegal transitions
-throw `InvalidTransitionException` and surface as `409 invalid_state_transition`.
-
-```
-                         POST /v1/payments
-                                │
-                                ▼
-                          ┌─────────┐
-                          │ Pending │
-                          └────┬────┘
-                  Authorize    │    Fail
-            (Phase 3 worker)   ├────────────┐
-                               ▼            ▼
-                       ┌────────────┐   ┌────────┐
-                       │ Authorized │   │ Failed │
-                       └────┬───────┘   └────────┘
-                            │     ▲
-            POST /capture   │     │  Fail
-                            ▼     │
-                       ┌──────────┴─┐
-                       │  Captured  │
-                       └────┬───────┘
-              Settle        │     POST /refund
-        (Phase 3 worker)    ├────────────┐
-                            ▼            │
-                       ┌─────────┐       │
-                       │ Settled │       │
-                       └────┬────┘       │
-                            │            │
-              POST /refund  │            │
-                            ▼            ▼
-                       ┌──────────────────┐
-                       │     Refunded     │
-                       └──────────────────┘
-```
-
-`Failed` and `Refunded` are terminal — no transitions leave them.
-
-Every transition writes a row to `payment_events`:
-
-| column        | meaning                                                |
-| ------------- | ------------------------------------------------------ |
-| `from_status` | The status before the transition. `null` only on the initial create event. |
-| `to_status`   | The status after the transition.                       |
-| `actor`       | Who drove it: `api` (the user-facing endpoint), `system` (the Phase 3 worker), or `worker` (background settlement). |
-| `reason`      | Domain-level reason code: `created`, `auth_ok`, `captured`, `settled`, `refunded`, `failed`. |
-| `payload`     | Optional structured context — e.g. `{"reason":"customer_request"}` on refunds. |
-| `at`          | Timestamp from `IClock.UtcNow`.                        |
-
-`GET /v1/payments/{id}` returns the timeline ordered by `at` ascending.
-
----
-
-## Architecture
-
-### High level
-
-Vertical-slice architecture inside a layered project graph. Each feature
-(`CreatePayment`, `GetPayment`) is one folder containing its command, handler,
-validator, and contract — instead of spreading those files across
-`Controllers/`, `Services/`, and `Repositories/`. Cross-cutting concerns
-(auth, logging, idempotency, EF Core) live in their own layers and are wired
-in via DI.
-
-```
-HTTP request
-   │
-   ▼
-CorrelationIdMiddleware     ← creates / propagates X-Request-Id
-   │
-   ▼
-ExceptionHandlingMiddleware ← translates app exceptions to ErrorEnvelope
-   │
-   ▼
-DevBearerAuthMiddleware     ← SHA-256 hash → merchants.api_key_hash
-   │                          binds CurrentMerchant, skips /health
-   ▼
-Minimal API endpoint
-   │
-   ▼
-MediatR command / query     ← FluentValidation runs before the handler
-   │
-   ▼
-Handler                     ← uses IIdempotencyStore + IPaymentsDbContext
-   │
-   ▼
-EF Core (PaymentsDbContext) ← single Postgres connection, snake_case mapping
-```
+## 2. Architectural overview
+
+### The picture in one paragraph
+
+A merchant sends an HTTP request to the API. The API validates it, stamps
+an idempotency record so retries are safe, writes the payment row, and
+returns. When that payment later moves money (capture), the API writes
+the payment row *and* an outbox row in the same database transaction. A
+background dispatcher reads outbox rows and publishes them onto RabbitMQ.
+A separate worker process consumes those messages, talks to the (stubbed)
+payment processor, updates the payment, and records what happened. The
+dashboard reads the API to show operators the current state and the full
+history of every payment.
+
+### The pieces
+
+| Piece              | Job                                                            | Why it's separate                                                     |
+| ------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **API**            | Take requests from merchants, validate, persist, return.       | The API must stay fast and predictable; nothing slow runs in-band.    |
+| **Worker**         | Process messages off the queue. Today: settle captured payments. | Failures here don't bring the API down. Retries don't block users.    |
+| **Postgres**       | Source of truth for payments, events, idempotency, outbox.     | Payments need real transactions and unique constraints. Boring is good. |
+| **RabbitMQ**       | Carry settlement work from API to worker.                      | Decouples timing. The API doesn't wait on the processor.              |
+| **Dashboard**      | Operator view of every payment and its history.                | Reviewers, support, and on-call all need to see what happened, fast.  |
+
+### Why we picked each tool
+
+- **PostgreSQL.** Money requires ACID. Postgres gives us that plus
+  unique constraints (the lock that makes idempotency work) and JSONB
+  (the flexibility we'd otherwise reach for a document DB to get).
+- **RabbitMQ via MassTransit.** Per-message ack, dead-letter queues,
+  and a great .NET story. MassTransit is the abstraction so we can move
+  to Azure Service Bus or SQS later without rewriting consumers.
+  ([ADR-0009](docs/adr/0009-masstransit-over-raw-rabbitmq.md))
+- **Vertical-slice + MediatR.** Each feature (`CreatePayment`,
+  `CapturePayment`) is one folder with the command, validator, handler,
+  and contract together. Adding or removing a feature touches one
+  place, not five.
+- **ULID identifiers.** Sortable like sequence numbers, unique like
+  UUIDs, readable in logs, safe across regions. `pay_…` for payments,
+  `evt_…` for events, `mrc_…` for merchants — the prefix tells you what
+  you're looking at.
+- **Outbox pattern.** When we capture a payment and need to enqueue
+  settlement, both the DB row and the queue message have to land or
+  neither does. Writing the queue message as a DB row inside the same
+  transaction guarantees it. The dispatcher reads the outbox and
+  publishes asynchronously. ([ADR-0008](docs/adr/0008-outbox-pattern-for-settlement.md))
+- **Testcontainers.** Integration tests spin up real Postgres and real
+  RabbitMQ in Docker. Mocked databases lie about migrations, value
+  conversions, locking, and concurrency. Real containers find real bugs.
+- **OpenTelemetry.** One vendor-neutral instrumentation stack covers
+  traces, metrics, and logs. Switching from console output to Tempo /
+  Mimir / Loki / Datadog in production is a one-line config change.
+  ([ADR-0011](docs/adr/0011-opentelemetry-sdk-and-default-exporter.md))
+- **Vite + React + TanStack Query.** The dashboard is read-mostly, so a
+  proper server-state cache (TanStack Query) carries far more weight than
+  any UI kit. We deliberately chose no Tailwind, no shadcn — opinionated
+  CSS over template-looking output.
+  ([ADR-0014](docs/adr/0014-frontend-stack.md), [ADR-0015](docs/adr/0015-visual-direction-swiss-data-dense.md))
+- **Typed API client from OpenAPI.** The frontend's request and response
+  shapes are generated from the API's schema. CI fails if anyone
+  changes the API without regenerating, so the two can't silently drift.
+  ([ADR-0016](docs/adr/0016-openapi-codegen-strategy.md))
+
+### What we built into the platform's bones
+
+- **Idempotency at every write.** `Idempotency-Key` is required on
+  create, capture, and refund. Two requests with the same key + same
+  body get the same response back; with a different body you get a
+  loud `409`. The key is scoped per operation, so a merchant can reuse
+  the same key for create and capture without collision.
+  ([ADR-0007](docs/adr/0007-idempotency-keys-per-operation.md))
+- **An audit trail you can trust.** Every state change writes a row to
+  `payment_events` in the same transaction as the state change itself.
+  No state can exist without its history. The dashboard's "event
+  timeline" is just `payment_events` ordered by time.
+  ([ADR-0006](docs/adr/0006-payment-events-same-transaction.md))
+- **Optimistic concurrency.** Each payment row has a `version` column;
+  the state machine bumps it on every transition. Two concurrent
+  captures can't both succeed.
+- **Structured logging with no secrets.** Every log line is single-line
+  JSON. `card_token`, `cvv`, `pan`, and friends are redacted at every
+  nesting depth by an enricher — they never reach a logger, and an
+  integration test asserts so. ([ADR-0013](docs/adr/0013-log-redaction-deny-list.md))
+- **Distributed traces across the queue boundary.** When the API
+  publishes a settlement message, the trace context goes with it. Open
+  the worker's processing span and you can walk back up to the original
+  HTTP request. Every log line carries the same `trace_id`.
+- **Cross-merchant isolation.** A merchant requesting another merchant's
+  payment gets `404`, never `403`, never the payment body. Tested
+  explicitly in the integration suite.
 
 ### Project layout
 
 ```
 backend/
-├── src/
-│   ├── PaymentPlatform.Api               # Hosting, middleware, endpoints, DI composition, RabbitMqHealthProbe
-│   ├── PaymentPlatform.Application       # MediatR features, validators, abstractions, common exceptions, IPaymentProcessor
-│   ├── PaymentPlatform.Domain            # Payment + Merchant aggregates, value objects, PaymentOutboxMessage
-│   ├── PaymentPlatform.Infrastructure    # EF Core DbContext + configurations + migrations, idempotency store, SystemClock, MassTransit publisher, StubPaymentProcessor, OutboxDispatcher hosted service
-│   ├── PaymentPlatform.Messaging         # SettlePayment message contract + queue / exchange names shared by API and Worker
-│   ├── PaymentPlatform.Worker            # IHost with MassTransit consumer, SettlePaymentConsumer, retry policy + DLQ topology
-│   └── PaymentPlatform.Contracts         # Public DTOs (request / response shapes, error envelope)
-└── tests/
-    ├── PaymentPlatform.UnitTests         # 139 tests — domain, state machine, validators, handlers, processor
-    └── PaymentPlatform.IntegrationTests  # 77 tests — Testcontainers Postgres + RabbitMQ + WebApplicationFactory + in-process Worker host
+  src/
+    PaymentPlatform.Api               # HTTP hosting, middleware, endpoint definitions
+    PaymentPlatform.Application       # Features (vertical slices), validators, abstractions
+    PaymentPlatform.Domain            # Payment + Merchant aggregates, state machine, value objects
+    PaymentPlatform.Infrastructure    # EF Core, idempotency store, outbox dispatcher, stub processor
+    PaymentPlatform.Messaging         # Queue contracts shared by API and Worker
+    PaymentPlatform.Worker            # Background process: settlement consumer
+    PaymentPlatform.Contracts         # Public DTOs returned by the API
+  tests/
+    PaymentPlatform.UnitTests         # Domain + handler + validator coverage
+    PaymentPlatform.IntegrationTests  # Real Postgres + real RabbitMQ via Testcontainers
+frontend/                             # Vite + React + TanStack Query dashboard
+docs/
+  adr/                                # 17 architecture decision records
+  acceptance/                         # Walkthroughs captured against the live stack
+scripts/
+  run.sh                              # Bring up the whole stack + verify
+  demo.sh                             # Walk every API endpoint
 ```
 
-Reference direction (no cycles):
-`Api → Application + Infrastructure + Contracts`,
+Reference direction: `Api → Application + Infrastructure + Contracts`,
 `Worker → Application + Infrastructure + Messaging`,
-`Application → Domain + Contracts`,
-`Infrastructure → Application + Domain + Messaging`,
-`Messaging`, `Contracts`, and `Domain` reference nothing.
-
-### Data model (Phase 1 subset)
-
-- `merchants(id, name, api_key_hash, created_at)` — seeded with two rows.
-- `payments(id, merchant_id, status, amount_minor, currency, customer_reference, card_token, metadata, created_at, updated_at, version)` — `status` walks the state machine (see [State machine](#payment-state-machine)); `version` backs optimistic concurrency on capture / refund.
-- `payment_events(id, payment_id, from_status, to_status, actor, reason, payload, at)` — append-only audit log, populated on every transition (including the initial `null → Pending` event on create). `payload` is JSONB.
-- `idempotency_keys(merchant_id, operation, key, request_hash, response_json, created_at)` — composite PK `(merchant_id, operation, key)`. Replay returns the cached `response_json`. The `operation` column is what makes per-operation key reuse safe.
-- `payment_outbox(id, aggregate_id, message_type, payload, created_at, dispatched_at)` — Phase 3 transactional outbox. The capture handler writes a row in the same `SaveChangesAsync` as the `payments` update; `OutboxDispatcher` polls (default 2s) for rows where `dispatched_at IS NULL`, publishes via MassTransit, and flips `dispatched_at`. A partial index on `(created_at) WHERE dispatched_at IS NULL` keeps the poll cheap.
-
-The `(merchant_id, created_at DESC, id DESC)` index on `payments` powers
-the Phase 2 list endpoint's cursor pagination.
-
-### Idempotency
-
-Two layers:
-
-1. **Application-level cache:** `IIdempotencyStore` looks up `(merchant_id, operation, key)`
-   before the handler runs. A hit returns the cached response body verbatim, with the
-   endpoint re-applying the original status code (e.g. `201 Created` for create,
-   `200 OK` for capture and refund).
-2. **Database-level guard:** unique constraint on `(merchant_id, operation, key)`. If two
-   concurrent requests race past the lookup, the loser catches Npgsql
-   `DbUpdateException` (SQLSTATE `23505`) and falls into the replay branch.
-
-Phase 2 added the `operation` column to that primary key — so the same
-`Idempotency-Key` string can safely be reused across `create_payment`,
-`capture_payment`, and `refund_payment` without collision. The rationale and
-migration shape live in [`docs/adr/0007-idempotency-keys-per-operation.md`](docs/adr/0007-idempotency-keys-per-operation.md).
-
-The body is hashed on insert. A future request with the same key but a
-different body fails loudly as `409 idempotency_key_conflict`.
-
-### Logging
-
-- Serilog with `CompactJsonFormatter` to stdout — single-line JSON per event.
-- `request_id` enriched via `LogContext.PushProperty` inside `CorrelationIdMiddleware`.
-- `merchant_id` enriched once the auth middleware resolves a merchant.
-- `card_token` is never passed to a logger and never appears in error
-  envelopes. The integration test `LoggingTests.CardToken_IsNeverLogged`
-  asserts this against the full captured log stream.
-- `trace_id` is populated in error responses (`Activity.Current?.TraceId`).
-  Wiring it onto every log line requires `Serilog.Enrichers.Span`, which
-  Phase 4's OpenTelemetry work pulls in.
-
-### Auth
-
-A dev-only bearer scheme. The middleware SHA-256-hashes the incoming token
-and looks up the matching `merchants.api_key_hash`. There are two seeded keys
-(see [Dev keys](#dev-keys)). The seam — `ICurrentMerchant` resolved from DI —
-is the same one an OAuth2 / OIDC implementation would plug into. Health
-endpoints bypass auth.
+`Application → Domain + Contracts`. No cycles.
 
 ---
 
-## Dev keys
+## 3. Tradeoffs made
 
-The migration seeds two merchants:
-
-| Merchant id | Name        | Bearer token         |
-| ----------- | ----------- | -------------------- |
-| `mrc_acme`  | Acme Corp   | `dev-key-mrc-acme`   |
-| `mrc_pied`  | Pied Piper  | `dev-key-mrc-pied`   |
-
-Tokens are stored as SHA-256 hashes; rotating them means changing the seed
-value and running a new migration. These keys are intentionally not secret —
-they're dev affordances for the take-home.
-
----
-
-## Running tests
-
-```bash
-cd backend
-dotnet test                    # 258 tests + 1 skip: 161 unit + 96 integration + 1 superseded wiring smoke
-dotnet test --filter "FullyQualifiedName~UnitTests"          # unit only — no Docker required
-dotnet test --filter "FullyQualifiedName~IntegrationTests"   # needs Docker running
-dotnet test --filter "FullyQualifiedName~Diagnostics"        # Phase 4 trace/metrics/redaction subset
-```
-
-Unit tests cover the domain aggregate, state machine, validators, handlers,
-and the stub processor. Integration tests use Testcontainers to spin up
-fresh `postgres:16-alpine` and `rabbitmq:3-management-alpine` containers
-per test run, then `WebApplicationFactory<Program>` to host the real API
-in-process against them. Phase 3 retry / DLQ / capstone tests share a
-single broker container via `[Collection(MessagingTestCollection.Name)]`
-because back-to-back fresh RabbitMQ fixtures struggle under Docker
-container churn. The fixture sets `POSTGRES_HOST_AUTH_METHOD=trust` so
-the Postgres container accepts host-bound connections without password
-handshake.
-
-The one skipped test (`SettlementEndToEndTests.PublishingSettlePayment_ReachesWorkerConsumer_WithinFiveSeconds`)
-is the Phase 3 Task 3 wiring smoke — superseded by Phase 3 Task 9's
-`HappyPathFullLifecycleTests`, which exercises the same publish-via-API →
-consume-via-Worker path end-to-end against real state machine semantics.
+| Decision                  | What we chose                       | What we gave up                       | Why                                                                                                                  |
+| ------------------------- | ----------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Database                  | PostgreSQL                          | NoSQL (Mongo, Dynamo)                 | Payments need ACID and unique constraints. JSONB still covers the flexibility we'd want.                              |
+| Queue                     | RabbitMQ via MassTransit            | Azure Service Bus / SQS               | Runs identically on a laptop and in prod. Per-message ack fits settlement. MassTransit keeps the move-later option.   |
+| Architecture style        | Vertical slice + MediatR            | Classic layered (Controllers/Services) | Higher cohesion. One folder per feature. Removing a feature touches one place, not five.                              |
+| Outbox pattern            | Built                               | Direct queue publish from the handler | Direct publish races: DB commits but publish fails (or vice versa). Outbox closes the window.                         |
+| Idempotency storage       | Postgres table                      | Redis-only                            | Redis is faster but loses data on crash. The DB is the source of truth. Redis goes in front later as a cache.        |
+| Cursor pagination         | Built                               | Offset pagination                     | Offset gets slow and inconsistent on high-write tables. Cursor is correct and scales.                                 |
+| Async workflow choice     | Settlement                          | Webhook delivery / reconciliation     | Settlement touches state, retries, audit, and traces — the most material to evaluate.                                 |
+| Auth                      | Dev bearer (SHA-256 hashed)         | Full OAuth2                           | OAuth2 wiring is mechanical noise for a take-home. The seam (`ICurrentMerchant`) is identical to what OAuth2 plugs into. |
+| Test infrastructure       | xUnit + Testcontainers              | Mocked DB and queue                   | Mocked infra lies. Real containers find real bugs and run fast on modern Docker.                                      |
+| Tracing exporter          | Console + configurable OTLP         | Always-on Jaeger                      | Spinning up Jaeger adds friction. Instrumentation is real; the exporter is a one-line swap.                           |
+| Frontend stack            | Vite + React + TanStack Query       | Next.js / Remix                       | The dashboard doesn't need SSR. Vite ships less, builds faster, and matches the take-home's scope.                    |
+| CSS approach              | CSS Modules + design tokens         | Tailwind / shadcn / any UI kit        | Template-looking output is a real failure mode. Hand-rolled CSS with tokens looks intentional and ships small.        |
 
 ---
 
-## Tradeoffs
-
-Phase-1-relevant decisions. The full list across all phases lives in
-[`.claude/plans/payment-platform.plan.md` §14](.claude/plans/payment-platform.plan.md).
-
-| Decision               | Chose                          | Gave up                                | Why                                                                                                                |
-| ---------------------- | ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Database               | PostgreSQL                     | Mongo / Dynamo                         | Payments need ACID and unique constraints. JSONB still gives us flexibility where we want it.                       |
-| Architecture           | Vertical slice + MediatR       | Classic layered (Controllers/Services) | Higher cohesion, less paging through folders to follow one feature, easier to retire a slice cleanly.               |
-| Idempotency storage    | Postgres table                 | Redis                                  | DB is the source of truth. Adding Redis as a cache is a Phase 4+ optimization, not a correctness requirement.       |
-| Auth                   | Hashed dev bearer              | OAuth2                                 | OAuth2 wiring is mechanical noise for an exercise. The seam (`ICurrentMerchant`) is identical.                       |
-| ID format              | ULID                           | UUIDv4 / sequential int                | Lexicographically sortable, monotonic-ish, debugger-friendly, multi-region-safe by default.                          |
-| Migration strategy     | `Database.Migrate()` on Dev startup | Migration-job container                | Phase 1 is a single API; a Job container is overkill. Phase 4 splits this into a dedicated migration step.           |
-| Integration test infra | Real Postgres via Testcontainers | Mocked `DbContext`                   | Mocks lie about migrations, constraints, value conversions, and concurrency. Real containers catch real bugs.        |
-
----
-
-## Assumptions
-
-Phase-1-relevant assumptions. The full list across all phases lives in
-[`.claude/plans/payment-platform.plan.md` §15](.claude/plans/payment-platform.plan.md).
+## 4. Assumptions
 
 1. **Scale.** ~500 merchants, ~5M payments/month, 200 req/s peak, p99 < 300ms.
-2. **Single region for the exercise.** No code assumes single-region — IDs are
-   globally unique, no in-process caches survive restart, idempotency is
-   scoped per merchant. A second region is a deploy concern, not a code
-   concern.
-3. **No real card data.** `card_token` is an opaque stub. PCI vault is out of
-   scope; the redaction discipline is what's being demonstrated.
-4. **Currency.** Stored as integer minor units (cents). Single currency per
-   payment. Mixed-currency rollups are a Phase 5+ concern.
-5. **Time.** All timestamps UTC. `IClock` is injected (`SystemClock`) so tests
-   can substitute a fixed clock.
-6. **Tenancy.** Single-tenant deployment serving many merchants. Cross-tenant
-   isolation is enforced in handler code via `merchant_id` filtering and
-   verified by `GetPaymentTests.Returns404_WhenPaymentBelongsToOtherMerchant`.
+2. **One region, but no single-region assumptions in code.** IDs are
+   globally unique (ULID), no in-process caches survive restart, the
+   outbox is regional, idempotency is scoped per merchant. Bringing up
+   a second region is a deploy concern, not a code change.
+3. **No real card data.** `card_token` is an opaque stub. A real PCI
+   vault is out of scope; the redaction discipline is what's being
+   demonstrated.
+4. **Currency.** Stored as integer minor units (cents). One currency
+   per payment.
+5. **Time.** All timestamps UTC. A `IClock` seam exists so tests can
+   substitute a fixed clock.
+6. **Tenancy.** Single-tenant deployment serving many merchants.
+   Isolation is enforced in handler code via `merchant_id` filtering
+   and tested explicitly.
+7. **Stub processor.** A deterministic in-process implementation of
+   `IPaymentProcessor`. The real adapter is the production swap.
+8. **No real money.** Development exercise only.
+
+A longer assumptions list (covering observability backends, frontend
+deployment, etc.) lives in
+[`docs/CODEMAPS/`](docs/) and the master plan.
 
 ---
 
-## Production considerations
+## 5. Production considerations
 
-What would change before this is something to bet revenue on. The first item
-is the most important.
+What would change before this is something to bet revenue on. The
+first item is the most important.
 
-- **Multi-region active-passive within the US.** Primary serves all traffic;
-  standby runs warm with replicated Postgres and an idle RabbitMQ broker.
-  Idempotency is what makes failover safe — merchant retries during the cut
-  either hit the replicated cached response or process fresh. Either way: no
-  double-charges.
-- **Migrations as a separate step.** `Database.Migrate()` at API startup is a
-  Phase 1 affordance. Production runs migrations as a pre-deploy job, gated
-  by an approval workflow.
-- **Real auth.** OAuth2 client-credentials for merchants, OIDC for dashboard
-  users, mTLS service-to-service. The `ICurrentMerchant` seam is the
-  insertion point.
-- **Secrets out of env vars.** Vault / Key Vault / Secrets Manager with
-  per-region replicas. The `ConnectionStrings__Payments` env var pattern is
-  fine for dev, not for prod.
-- **Real observability backends.** OTLP → Tempo + Mimir + Loki (or the
-  cloud-native equivalents). Trace ids must carry a region tag for
-  post-failover analysis.
-- **Rate limiting** moves from per-instance to Redis-backed sliding window,
-  per region.
-- **Card data** lands in a separate tokenization vault in a different trust
-  zone. The payment service never sees PAN.
-- **Audit completeness.** Phase 2 adds a `payment_events` table tracking
-  every state transition with actor + reason. That's the audit trail
-  payments needs in production.
+- **Multi-region active-passive within the US.** Primary serves all
+  traffic; standby runs warm with replicated Postgres and an idle
+  RabbitMQ broker. Idempotency is what makes failover safe — when
+  merchants retry across the cut they either hit the replicated cached
+  response or process fresh. Either way: no double-charges. This is
+  why the brief asks about idempotency.
+- **Postgres high availability.** Synchronous replication inside a
+  region for HA, asynchronous across regions for DR. Automated
+  failover via Patroni or the cloud-managed equivalent. Backups with a
+  tested restore drill.
+- **RabbitMQ clusters.** Three-node clusters per region, quorum queues
+  for settlement. Cross-region replication isn't worth the operational
+  cost — the standby region's broker stays quiet until failover.
+- **Real auth.** OAuth2 client-credentials for merchants, OIDC for
+  dashboard users, mTLS service-to-service. The `ICurrentMerchant`
+  seam is the insertion point.
+- **Secrets out of env vars.** Vault / Key Vault / Secrets Manager
+  with per-region replicas.
+- **Real observability backends.** OTLP collector → Tempo (traces) +
+  Mimir (metrics) + Loki (logs), or the cloud-native equivalents.
+  Trace ids carry a region tag for post-failover analysis.
+- **Replace the stub processor.** A real adapter (Stripe, Adyen, or
+  direct gateway) behind a Polly circuit breaker, with per-region
+  routing if the processor is itself multi-region.
+- **Migrations as a separate step.** `Database.Migrate()` at API
+  startup is a dev affordance. Production runs migrations as a
+  pre-deploy job, gated by an approval workflow, and applies them to
+  the standby through replication — never run separately.
+- **Rate limiting moves to Redis.** Per-instance in-memory limiting
+  doesn't survive horizontal scale.
+- **A real card tokenization vault** in a separate trust zone. The
+  payment service never sees raw PAN.
+- **Webhook delivery for merchants.** Reuse the outbox + worker pattern
+  with HTTP delivery and per-merchant retry policy.
+- **Chaos testing.** Game days that fail the DB primary, kill the
+  broker, *and* trigger an actual region failover. Untested failover
+  is broken failover.
 
 ---
 
-## What's next
+## 6. Areas for future improvement
 
-Phases planned in [`.claude/plans/payment-platform.plan.md` §13](.claude/plans/payment-platform.plan.md):
-
-- **Phase 5** — React + Vite dashboard with list view, status filter, cursor
-  pagination, detail view with event timeline.
-- **Phase 6** — Polish, scripted demo, finalized docs, real authorization
-  processor that replaces the psql-driven `Pending → Authorized` stand-in.
-
-Phase 3 (the async settlement worker) and Phase 4 (observability) are
-shipped — see the [Phase 3 walkthrough](#phase-3-walkthrough) and
-[Phase 4 observability walkthrough](#phase-4--observability-walkthrough)
-for live acceptance scripts. Design rationale for the async settlement
-spine lives in [`docs/adr/0008-async-settlement-architecture.md`](docs/adr/)
-(outbox-write-then-publish ordering, FOR UPDATE row lock for
-concurrent-delivery serialization, `Ignore<>` + DLQ for permanent
-failures); the observability decisions live in ADRs 0011/0012/0013.
+1. **An authorization endpoint.** Today payments are created in
+   `Pending` and the API has no endpoint to move them to `Authorized`.
+   The domain has the method; capture refuses to run without it. A
+   real processor adapter and a `POST /v1/payments/{id}/authorize` (or
+   automatic authorize on create with a callback) would close the loop.
+2. **Reconciliation.** A daily batch comparing our `payments` table
+   against the processor's settlement report. Catches drift early.
+3. **Partial captures and partial refunds.** The schema supports it;
+   we'd add the flow.
+4. **Multi-currency conversion** for cross-currency rollups.
+5. **Merchant-scoped API keys with rotation.** Currently a single dev
+   key per merchant.
+6. **The dashboard's metadata transform caveat.** ADR-0017 documents
+   that the API client converts every JSON key between snake_case and
+   camelCase. Future surfaces that let merchants author free-form
+   metadata keys need the transform to skip nested objects under known
+   string-map fields.
 
 ---
 
 ## Troubleshooting
 
-| Symptom                                                                                                  | Cause / fix                                                                                                                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `docker compose up` fails with `port is already allocated` on `5433`                                    | Something else owns host port 5433. Override: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects to Postgres through the internal Docker network, so it is unaffected. Integration tests are also unaffected — Testcontainers always uses a random port. |
-| `Bind for 0.0.0.0:8080 failed: port is already allocated`                                                | Something else owns host port 8080. Override the host-side mapping: `API_HOST_PORT=5050 docker compose up -d` (then use `http://localhost:5050` for the walkthrough). |
-| `Cannot connect to the Docker daemon`                                                                    | Docker Desktop isn't running. Open it; wait for the whale icon to stop animating; retry. Integration tests need this too.                                                                                                              |
-| `dotnet test` integration tests fail with `28P01 password authentication failed for user "postgres"`     | A stray host Postgres is listening on `localhost:5432` and the API host config is falling through to it. Stop the host Postgres, or run only the unit tests (`--filter "FullyQualifiedName~UnitTests"`).                                |
-| Integration tests fail with `Testcontainers ... failed to pull image`                                    | Docker is up but can't reach Docker Hub. Pre-pull manually: `docker pull postgres:16-alpine`.                                                                                                                                            |
-| `401 Bearer token is not recognized` even though the key looks right                                     | The Postgres volume from a previous run is missing the seed data. Run `docker compose down -v` to drop the volume, then `docker compose up -d` to re-seed.                                                                              |
-| Logs aren't JSON                                                                                          | You're looking at the .NET host bootstrap output. The Serilog JSON pipeline starts after `WebApplication.CreateBuilder`. Once you see the `"Now listening on"` line, every subsequent line is JSON.                                       |
-| `MSB3277` warnings about `Microsoft.EntityFrameworkCore.Relational` versions                              | The pin in `Infrastructure.csproj` should silence this. If it returns after a NuGet bump, re-pin Relational to the major used by `Npgsql.EntityFrameworkCore.PostgreSQL`.                                                                |
+| Symptom                                                              | What it usually means / what to do                                                                                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `docker compose up` fails on `5433` (`port is already allocated`)    | Something else owns it. Override: `POSTGRES_HOST_PORT=15432 docker compose up -d`. The API connects via the internal Docker network, so it's unaffected.       |
+| `docker compose up` fails on `8080`                                  | Same idea: `API_HOST_PORT=5050 docker compose up -d`.                                                                                                          |
+| Cannot connect to the Docker daemon                                  | Docker Desktop isn't running. Open it, wait for the whale icon to settle, retry.                                                                              |
+| Integration tests fail with `Testcontainers ... failed to pull image` | Docker is up but can't reach Docker Hub. Pre-pull: `docker pull postgres:16-alpine && docker pull rabbitmq:3-management-alpine`.                              |
+| `401 Bearer token is not recognized` with a clearly-correct key      | Stale Postgres volume from an earlier run is missing the seed data. `docker compose down -v` then `docker compose up -d` re-seeds.                            |
+| Logs aren't single-line JSON                                         | You're looking at the .NET host bootstrap output. The Serilog pipeline starts after `WebApplication.CreateBuilder`. Once you see `Now listening on`, it's on. |
+| The dashboard shows `NaN.NaN` for every amount                       | The frontend lost its snake/camel transform. See [ADR-0017](docs/adr/0017-api-client-case-translation.md).                                                    |
+
+---
+
+## Further reading
+
+- 17 architecture decision records under [`docs/adr/`](docs/adr/).
+- The acceptance walkthroughs captured against the live stack live in
+  [`docs/acceptance/`](docs/acceptance/).
+- The visual direction for the dashboard:
+  [`docs/visual-direction.md`](docs/visual-direction.md).
+- Test coverage snapshot:
+  [`docs/coverage.md`](docs/coverage.md).
