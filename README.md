@@ -1,8 +1,7 @@
 # Argyle — Payment Processing Platform
 
-A take-home build for the Argyle senior engineer exercise. Two services
-behind a single API, a worker that handles money movement out-of-band,
-and a dashboard for operators to see what happened.
+Argyle senior engineer take-home. An API for payment writes, a worker
+that does settlement async, and an operator dashboard on top.
 
 The full brief lives in [`Payment-Platform-Exercise.md`](Payment-Platform-Exercise.md).
 
